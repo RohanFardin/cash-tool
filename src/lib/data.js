@@ -39,15 +39,16 @@ export async function getTodayReport() {
   if (error) throw new Error('Unable to load today’s report.')
   if (!report) {
     return {
-      date, report: null, transactions: [], customerEntries: [], supplierEntries: [], totals: totals(null),
+      date, report: null, cashEntries: [], transactions: [], customerEntries: [], supplierEntries: [], totals: totals(null),
     }
   }
-  const [transactionResult, customerResult, supplierResult] = await Promise.all([
+  const [transactionResult, customerResult, supplierResult, cashResult] = await Promise.all([
     supabase.from('transactions').select('*').eq('daily_report_id', report.id).order('created_at'),
-    supabase.from('customer_ledger_entries').select('*').eq('daily_report_id', report.id).order('created_at'),
-    supabase.from('supplier_ledger_entries').select('*').eq('daily_report_id', report.id).order('created_at'),
+    supabase.from('customer_ledger_entries').select('*, customers(name)').eq('daily_report_id', report.id).order('created_at'),
+    supabase.from('supplier_ledger_entries').select('*, suppliers(name)').eq('daily_report_id', report.id).order('created_at'),
+    supabase.from('cash_sales_entries').select('*').eq('daily_report_id', report.id).order('created_at'),
   ])
-  if (transactionResult.error || customerResult.error || supplierResult.error) {
+  if (transactionResult.error || customerResult.error || supplierResult.error || cashResult.error) {
     throw new Error('Unable to load today’s entries.')
   }
   const transactions = transactionResult.data || []
@@ -56,6 +57,7 @@ export async function getTodayReport() {
   return {
     date,
     report,
+    cashEntries: cashResult.data || [],
     transactions,
     customerEntries,
     supplierEntries,
@@ -78,6 +80,7 @@ export async function getDailyEntryPortal() {
   const names = new Map((profilesResult.data || []).map((profile) => [profile.id, profile.full_name || profile.username]))
   const addCreator = (rows) => rows.map((row) => ({
     ...row,
+    party_name: row.customers?.name || row.suppliers?.name,
     creator_name: names.get(row.created_by) || 'Storekeeper',
   }))
   return {
@@ -88,6 +91,7 @@ export async function getDailyEntryPortal() {
     customerEntries: addCreator(today.customerEntries),
     supplierEntries: addCreator(today.supplierEntries),
     transactions: addCreator(today.transactions),
+    cashEntries: addCreator(today.cashEntries),
   }
 }
 

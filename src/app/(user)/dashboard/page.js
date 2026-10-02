@@ -17,7 +17,7 @@ const shortcuts = [
 
 export default async function DashboardPage() {
   const data = await getDailyEntryPortal()
-  const count = data.transactions.length + data.customerEntries.length + data.supplierEntries.length
+  const count = data.cashEntries.length + data.transactions.length + data.customerEntries.length + data.supplierEntries.length
   return <div className="page-stack daily-page">
     <header className="hero-heading"><div><p className="eyebrow">Daily Entry Portal</p><h1>{formatDate(data.date, true)}</h1><p>Enter all of today’s pharmacy accounts in one place.</p></div><span className={`status ${data.report?.status || 'draft'}`}>{data.report?.status || 'draft'}</span></header>
     <nav className="entry-shortcuts" aria-label="Daily entry sections">{shortcuts.map(([id, label, Icon]) => <a key={id} href={`#${id}`}><Icon size={19} /><span>{label}</span></a>)}</nav>

@@ -42,7 +42,7 @@ async function ensureTodayReport(supabase, userId) {
 }
 
 function refreshUserPages() {
-  ['/dashboard', '/cash-sales', '/credit', '/supplier-payments', '/cash-purchases', '/overhead', '/conveyance', '/summary']
+  ['/dashboard', '/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance', '/summary']
     .forEach((path) => revalidatePath(path))
 }
 
@@ -72,16 +72,18 @@ export async function logoutAction() {
 
 export async function saveCashSalesAction(_previous, formData) {
   const { user } = await requireRole('user')
-  const value = amount(formData.get('cash_sales'), true)
-  if (value === null) return bad('Cash sales must be zero or greater.')
+  const value = amount(formData.get('cash_sales'))
+  if (value === null) return bad('Amount must be greater than zero.')
   try {
     const supabase = await createClient()
     const report = await ensureTodayReport(supabase, user.id)
     if (report.status !== 'draft') return bad('This report has been submitted and is locked.')
-    const { error } = await supabase.from('daily_reports').update({ cash_sales: value }).eq('id', report.id)
+    const { error } = await supabase.from('cash_sales_entries').insert({
+      daily_report_id: report.id, amount: value, created_by: user.id,
+    })
     if (error) throw error
     refreshUserPages()
-    return ok('Cash sales saved.')
+    return ok('Cash sales entry added.')
   } catch (error) {
     console.error('saveCashSalesAction', error)
     return bad('Unable to save cash sales. Please try again.')
@@ -122,6 +124,7 @@ export async function addCustomerAction(_previous, formData) {
 
 export async function saveCustomerLedgerAction(_previous, formData) {
   const { user } = await requireRole('user')
+  if (formData.get('id')) return bad('Saved entries cannot be edited.')
   const customerId = positiveId(formData.get('customer_id'))
   const entryType = String(formData.get('entry_type') || '')
   const value = amount(formData.get('amount'))
@@ -137,15 +140,13 @@ export async function saveCustomerLedgerAction(_previous, formData) {
     ])
     if (reportError) return bad(reportError)
     if (!customerResult.data) return bad('That customer is not available.')
-    const id = positiveId(formData.get('id'))
     const values = { customer_id: customerId, entry_type: entryType, amount: value, description }
-    const query = id
-      ? supabase.from('customer_ledger_entries').update(values).eq('id', id).eq('daily_report_id', report.id)
-      : supabase.from('customer_ledger_entries').insert({ ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id })
-    const { error } = await query
+    const { error } = await supabase.from('customer_ledger_entries').insert({
+      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
+    })
     if (error) throw error
     refreshUserPages()
-    return ok(id ? 'Credit entry updated.' : 'Credit entry added.')
+    return ok('Credit entry added.')
   } catch (error) {
     console.error('saveCustomerLedgerAction', error)
     return bad('Unable to save the credit entry. Please try again.')
@@ -154,20 +155,12 @@ export async function saveCustomerLedgerAction(_previous, formData) {
 
 export async function deleteCustomerLedgerAction(_previous, formData) {
   await requireRole('user')
-  try {
-    const supabase = await createClient()
-    const { error } = await supabase.from('customer_ledger_entries').delete().eq('id', formData.get('id'))
-    if (error) throw error
-    refreshUserPages()
-    return ok('Credit entry deleted.')
-  } catch (error) {
-    console.error('deleteCustomerLedgerAction', error)
-    return bad('Unable to delete the credit entry.')
-  }
+  return bad('Saved entries cannot be deleted.')
 }
 
 export async function saveSupplierLedgerAction(_previous, formData) {
   const { user } = await requireRole('user')
+  if (formData.get('id')) return bad('Saved entries cannot be edited.')
   const supplierId = positiveId(formData.get('supplier_id'))
   const entryType = String(formData.get('entry_type') || '')
   const value = amount(formData.get('amount'))
@@ -183,15 +176,13 @@ export async function saveSupplierLedgerAction(_previous, formData) {
     ])
     if (reportError) return bad(reportError)
     if (!supplierResult.data) return bad('That supplier is not available.')
-    const id = positiveId(formData.get('id'))
     const values = { supplier_id: supplierId, entry_type: entryType, amount: value, description }
-    const query = id
-      ? supabase.from('supplier_ledger_entries').update(values).eq('id', id).eq('daily_report_id', report.id)
-      : supabase.from('supplier_ledger_entries').insert({ ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id })
-    const { error } = await query
+    const { error } = await supabase.from('supplier_ledger_entries').insert({
+      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
+    })
     if (error) throw error
     refreshUserPages()
-    return ok(id ? 'Supplier entry updated.' : 'Supplier entry added.')
+    return ok('Supplier entry added.')
   } catch (error) {
     console.error('saveSupplierLedgerAction', error)
     return bad('Unable to save the supplier entry. Please try again.')
@@ -200,20 +191,12 @@ export async function saveSupplierLedgerAction(_previous, formData) {
 
 export async function deleteSupplierLedgerAction(_previous, formData) {
   await requireRole('user')
-  try {
-    const supabase = await createClient()
-    const { error } = await supabase.from('supplier_ledger_entries').delete().eq('id', formData.get('id'))
-    if (error) throw error
-    refreshUserPages()
-    return ok('Supplier entry deleted.')
-  } catch (error) {
-    console.error('deleteSupplierLedgerAction', error)
-    return bad('Unable to delete the supplier entry.')
-  }
+  return bad('Saved entries cannot be deleted.')
 }
 
 export async function saveAmountEntryAction(_previous, formData) {
   const { user } = await requireRole('user')
+  if (formData.get('id')) return bad('Saved entries cannot be edited.')
   const category = String(formData.get('category') || '')
   const value = amount(formData.get('amount'))
   if (!['cash_purchase', 'conveyance'].includes(category)) return bad('Invalid entry type.')
@@ -222,7 +205,6 @@ export async function saveAmountEntryAction(_previous, formData) {
     const supabase = await createClient()
     const { report, error: reportError } = await editableTodayReport(supabase, user.id)
     if (reportError) return bad(reportError)
-    const id = positiveId(formData.get('id'))
     const values = {
       category,
       transaction_subtype: null,
@@ -231,13 +213,12 @@ export async function saveAmountEntryAction(_previous, formData) {
       description: null,
       overhead_category_id: null,
     }
-    const query = id
-      ? supabase.from('transactions').update(values).eq('id', id).eq('daily_report_id', report.id)
-      : supabase.from('transactions').insert({ ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id })
-    const { error } = await query
+    const { error } = await supabase.from('transactions').insert({
+      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
+    })
     if (error) throw error
     refreshUserPages()
-    return ok(id ? 'Amount updated.' : 'Amount added.')
+    return ok('Amount added.')
   } catch (error) {
     console.error('saveAmountEntryAction', error)
     return bad('Unable to save the amount. Please try again.')
@@ -246,6 +227,7 @@ export async function saveAmountEntryAction(_previous, formData) {
 
 export async function saveOverheadEntryAction(_previous, formData) {
   const { user } = await requireRole('user')
+  if (formData.get('id')) return bad('Saved entries cannot be edited.')
   const categoryId = positiveId(formData.get('overhead_category_id'))
   const value = amount(formData.get('amount'))
   if (!categoryId) return bad('Select an overhead cost.')
@@ -258,18 +240,16 @@ export async function saveOverheadEntryAction(_previous, formData) {
     ])
     if (reportError) return bad(reportError)
     if (!categoryResult.data) return bad('That overhead option is not available.')
-    const id = positiveId(formData.get('id'))
     const values = {
       category: 'overhead', transaction_subtype: null, name: categoryResult.data.name,
       amount: value, description: null, overhead_category_id: categoryId,
     }
-    const query = id
-      ? supabase.from('transactions').update(values).eq('id', id).eq('daily_report_id', report.id)
-      : supabase.from('transactions').insert({ ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id })
-    const { error } = await query
+    const { error } = await supabase.from('transactions').insert({
+      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
+    })
     if (error) throw error
     refreshUserPages()
-    return ok(id ? 'Overhead cost updated.' : 'Overhead cost added.')
+    return ok('Overhead cost added.')
   } catch (error) {
     console.error('saveOverheadEntryAction', error)
     return bad('Unable to save the overhead cost. Please try again.')
@@ -292,16 +272,7 @@ function transactionInput(formData) {
 
 export async function deleteTransactionAction(_previous, formData) {
   await requireRole('user')
-  try {
-    const supabase = await createClient()
-    const { error } = await supabase.from('transactions').delete().eq('id', formData.get('id'))
-    if (error) throw error
-    refreshUserPages()
-    return ok('Entry deleted.')
-  } catch (error) {
-    console.error('deleteTransactionAction', error)
-    return bad('Unable to delete the entry. Please try again.')
-  }
+  return bad('Saved entries cannot be deleted.')
 }
 
 export async function submitReportAction(_previous, formData) {
@@ -347,13 +318,15 @@ export async function adminUpdateReportAction(_previous, formData) {
   try {
     const id = String(formData.get('id'))
     const supabase = await createClient()
-    const { error } = await supabase.from('daily_reports').update({
-      cash_sales: cashSales, status, notes: clean(formData.get('notes'), 1000),
-    }).eq('id', id)
+    const { error } = await supabase.rpc('admin_update_daily_report', {
+      p_report_id: id, p_cash_sales: cashSales, p_status: status,
+      p_notes: clean(formData.get('notes'), 1000),
+    })
     if (error) throw error
     revalidatePath('/admin')
     revalidatePath('/admin/reports')
     revalidatePath(`/admin/reports/${id}`)
+    refreshUserPages()
     return ok('Report updated.')
   } catch (error) {
     console.error('adminUpdateReportAction', error)

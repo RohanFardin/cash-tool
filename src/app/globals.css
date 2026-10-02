@@ -150,6 +150,9 @@ input:disabled { background: #edf1ef; color: #66736f; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; }.pagination span { color: var(--muted); font-size: .85rem; }
 .helper-text { color: var(--muted); font-size: .88rem; }
 .daily-page { max-width: 1060px; }
+.history-link { justify-self: end; color: var(--primary); font-size: .85rem; font-weight: 700; }
+.history-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; }.history-filter label { flex: 1; min-width: 180px; }
+.history-totals { display: flex; flex-wrap: wrap; gap: 1.5rem; }.history-totals > div { display: grid; gap: .35rem; }.history-totals span, .history-note { font-size: .8rem; color: var(--muted); }.history-note { display: block; margin-top: .3rem; }.history-totals strong { font-size: 1.1rem; }
 .entry-shortcuts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .65rem; position: sticky; top: 0; z-index: 25; padding: .65rem; margin: -.65rem; background: rgba(244,247,246,.92); backdrop-filter: blur(12px); }
 .entry-shortcuts a { min-height: 66px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .35rem; padding: .5rem; border: 1px solid var(--line); border-radius: 13px; background: #fff; color: #52615d; font-size: .72rem; font-weight: 700; text-align: center; }
 .entry-shortcuts a:hover { color: var(--primary); border-color: #9bcabd; transform: translateY(-1px); }

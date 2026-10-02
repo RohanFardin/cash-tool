@@ -23,6 +23,6 @@ export function taka(value) {
 export function dateTime(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('en-BD', {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: BUSINESS_TIME_ZONE,
+    dateStyle: 'medium', timeStyle: 'medium', timeZone: BUSINESS_TIME_ZONE,
   }).format(new Date(value))
 }

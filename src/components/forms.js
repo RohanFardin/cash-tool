@@ -8,9 +8,10 @@ import { adminUpdateReportAction } from '@/app/actions'
 import { ActionMessage, SubmitButton } from '@/components/action-ui'
 import { taka } from '@/lib/format'
 
-export function CashSalesForm({ value, locked }) {
+export function CashSalesForm({ locked }) {
   const [state, action] = useActionState(saveCashSalesAction, null)
-  return <form action={action} className="card form-card"><label><span>Total Cash Sales</span><div className="money-input"><b>৳</b><input name="cash_sales" type="number" inputMode="decimal" min="0" step="0.01" defaultValue={value || 0} disabled={locked} required /></div></label><ActionMessage state={state} />{!locked && <SubmitButton>Save Cash Sales</SubmitButton>}</form>
+  if (locked) return null
+  return <form action={action} className="quick-amount-form"><label><span>Enter Amount</span><div className="money-input"><b>৳</b><input name="cash_sales" type="number" inputMode="decimal" min="0.01" step="0.01" required /></div></label><SubmitButton>Add Cash Sales</SubmitButton><ActionMessage state={state} /></form>
 }
 
 const labels = {
@@ -53,7 +54,7 @@ export function SubmitReport({ status }) {
   const [open, setOpen] = useState(false)
   const [state, action] = useActionState(submitReportAction, null)
   if (status !== 'draft') return <p className="notice success">This report is {status} and locked for storekeepers.</p>
-  return <><ActionMessage state={state} /><button className="button primary full" onClick={() => setOpen(true)}>Submit Today’s Report</button>{open && <div className="modal-backdrop"><div className="modal confirm-modal"><h2>Submit today’s report?</h2><p>Please review all figures. An administrator can approve and lock the report.</p><form action={action}><input type="hidden" name="confirm" value="yes" /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setOpen(false)}>Cancel</button><SubmitButton pendingText="Submitting…">Yes, Submit</SubmitButton></div></form></div></div>}</>
+  return <><ActionMessage state={state} /><button className="button primary full" onClick={() => setOpen(true)}>Submit Today's Report</button>{open && <div className="modal-backdrop"><div className="modal confirm-modal"><h2>Submit today's report?</h2><p>Submitting closes today's entry forms and makes your summary available.</p><form action={action}><input type="hidden" name="confirm" value="yes" /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setOpen(false)}>Cancel</button><SubmitButton pendingText="Submitting…">Yes, Submit</SubmitButton></div></form></div></div>}</>
 }
 
 export function ApproveReport({ id, status }) {
