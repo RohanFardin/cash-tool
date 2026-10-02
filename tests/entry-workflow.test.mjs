@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite'
 
 const operator = '11111111-1111-4111-8111-111111111111'
 const admin = '22222222-2222-4222-8222-222222222222'
+const secondOperator = '33333333-3333-4333-8333-333333333333'
 const db = new PGlite()
 let todayId
 let yesterdayId
@@ -58,12 +59,17 @@ before(async () => {
   for (const file of (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort()) {
     if (file.startsWith('003')) {
       await db.query('insert into auth.users (id,email) values ($1,$2),($3,$4)', [operator, 'user@pharmacy.local', admin, 'admin@pharmacy.local'])
+      await db.query('insert into auth.users (id,email) values ($1,$2)', [secondOperator, 'user2@pharmacy.local'])
       await db.query("update public.profiles set role = 'superadmin' where id = $1", [admin])
       const oldReport = await db.query("insert into public.daily_reports (business_date,cash_sales,submitted_by,status) values (public.current_business_date()-1,400,$1,'submitted') returning id", [operator])
       yesterdayId = oldReport.rows[0].id
       await db.query("insert into public.transactions (daily_report_id,category,transaction_subtype,name,amount,created_by) values ($1,'credit','credit_sale','Alice',75,$2)", [yesterdayId, operator])
     }
-    await db.exec(await readFile(new URL(file, directory), 'utf8'))
+    try {
+      await db.exec(await readFile(new URL(file, directory), 'utf8'))
+    } catch (error) {
+      throw new Error(`${file}: ${error.message}`)
+    }
   }
   await actor(admin)
   customerId = (await db.query("insert into public.customers (name,created_by) values ('Alice',$1) returning id", [admin])).rows[0].id
@@ -207,4 +213,81 @@ test('administrator cash corrections preserve history and report totals', async 
 test('anonymous users cannot read history', async () => {
   await db.exec('set local role anon')
   await assert.rejects(db.query('select * from public.entry_history'), /permission denied/)
+})
+
+test('both storekeepers share one daily report, history, totals and submission', async () => {
+  await cash(100)
+  await actor(secondOperator)
+  await db.query('insert into public.cash_sales_entries (daily_report_id,amount,created_by) values ($1,200,$2)', [todayId, secondOperator])
+  assert.equal(await total(), 300)
+  const entries = await db.query('select created_by from public.cash_sales_entries where daily_report_id=$1 order by id', [todayId])
+  assert.deepEqual(entries.rows.map((row) => row.created_by), [operator, secondOperator])
+  assert.equal((await db.query('select id from public.daily_reports where business_date=public.current_business_date()')).rows.length, 1)
+  await submit()
+  await actor(operator)
+  const report = (await db.query('select * from public.daily_reports where id=$1', [todayId])).rows[0]
+  assert.equal(report.status, 'submitted')
+  assert.equal(report.submitted_by, secondOperator)
+  assert.equal(Number(report.cash_sales), 300)
+  await assert.rejects(cash(10))
+})
+
+test('administrators can edit every submitted category in place', async () => {
+  const records = [
+    ['cash', 'cash_sales_entries', (await cash(100)).rows[0]],
+    ['customer', 'customer_ledger_entries', (await credit('credit_sale', 200)).rows[0]],
+    ['supplier', 'supplier_ledger_entries', (await supplier('purchase', 300)).rows[0]],
+    ['transaction', 'transactions', (await expense('cash_purchase', 20)).rows[0]],
+    ['transaction', 'transactions', (await expense('overhead', 30)).rows[0]],
+    ['transaction', 'transactions', (await expense('conveyance', 40)).rows[0]],
+  ]
+  await submit()
+  await actor(admin)
+  for (const [source, table, entry] of records) {
+    const partyId = source === 'customer' ? customerId : source === 'supplier' ? supplierId : null
+    const type = source === 'customer' ? 'credit_recovery' : source === 'supplier' ? 'payment' : null
+    const result = await db.query('select public.admin_edit_entry($1,$2,$3,$4,$5,$6,$7) as report_date', [source, entry.id, Number(entry.amount) + 10, partyId, type, entry.category === 'overhead' ? overheadId : null, 'Corrected'])
+    assert.ok(result.rows[0].report_date)
+    const saved = (await db.query(`select * from public.${table} where id=$1`, [entry.id])).rows[0]
+    assert.equal(Number(saved.amount), Number(entry.amount) + 10)
+    assert.equal(saved.created_at.toISOString(), entry.created_at.toISOString())
+    assert.equal(saved.created_by, operator)
+    assert.equal(saved.updated_by, admin)
+    if (type) assert.equal(saved.entry_type, type)
+  }
+  assert.equal(await total(), 110)
+  const cashCount = await db.query('select count(*) from public.cash_sales_entries where daily_report_id=$1', [todayId])
+  assert.equal(Number(cashCount.rows[0].count), 1, 'individual edits do not create correction rows')
+  const customerTotals = (await db.query("select * from public.entry_history_totals('credit',null,public.current_business_date())")).rows[0]
+  assert.equal(Number(customerTotals.primary_total), 0)
+  assert.equal(Number(customerTotals.secondary_total), 210)
+  assert.equal((await db.query('select status from public.daily_reports where id=$1', [todayId])).rows[0].status, 'submitted')
+})
+
+test('operators cannot call the administrator entry editor', async () => {
+  const entry = (await cash(100)).rows[0]
+  await assert.rejects(db.query("select public.admin_edit_entry('cash',$1,10)", [entry.id]), /Administrator access required/)
+})
+
+test('report-date totals include only the selected submitted day', async () => {
+  await cash(100)
+  await credit('credit_sale', 50)
+  const current = (await db.query('select * from public.entry_history_totals(null,null,public.current_business_date())')).rows[0]
+  assert.equal(Number(current.entry_count), 2)
+  assert.equal(Number(current.primary_total), 150)
+  const old = (await db.query('select * from public.entry_history_totals(null,null,public.current_business_date()-1)')).rows[0]
+  assert.equal(Number(old.entry_count), 2)
+  assert.equal(Number(old.primary_total), 475)
+})
+
+test('administrators can correct previous-day cash and legacy credit entries', async () => {
+  await actor(admin)
+  const oldCash = (await db.query('select * from public.cash_sales_entries where daily_report_id=$1', [yesterdayId])).rows[0]
+  await db.query("select public.admin_edit_entry('cash',$1,350)", [oldCash.id])
+  assert.equal(Number((await db.query('select cash_sales from public.daily_reports where id=$1', [yesterdayId])).rows[0].cash_sales), 350)
+  const legacy = (await db.query("select id from public.transactions where daily_report_id=$1 and category='credit'", [yesterdayId])).rows[0]
+  await db.query("select public.admin_edit_entry('transaction',$1,25,$2,'credit_recovery')", [legacy.id, customerId])
+  const saved = (await db.query("select * from public.entry_history where source='transaction' and id=$1", [legacy.id])).rows[0]
+  assert.equal(saved.entry_type, 'credit_recovery')
+  assert.equal(Number(saved.amount), 25)
 })

@@ -46,6 +46,38 @@ function refreshUserPages() {
     .forEach((path) => revalidatePath(path))
 }
 
+function refreshAdminPages() {
+  ['/admin/summary', '/admin/cash-sales', '/admin/credit-recovery', '/admin/supplier',
+    '/admin/local-supplier', '/admin/overhead-cost', '/admin/conveyance']
+    .forEach((path) => revalidatePath(path))
+}
+
+export async function adminEditEntryAction(_previous, formData) {
+  await requireRole('superadmin')
+  const source = String(formData.get('source') || '')
+  const id = positiveId(formData.get('id'))
+  const rawAmount = Number(formData.get('amount'))
+  if (!['cash', 'customer', 'supplier', 'transaction'].includes(source) || !id) return bad('That entry is not available.')
+  if (!Number.isFinite(rawAmount) || rawAmount === 0) return bad('Enter a valid amount.')
+  try {
+    const supabase = await createClient()
+    const { error } = await supabase.rpc('admin_edit_entry', {
+      p_source: source, p_id: id, p_amount: Math.round(rawAmount * 100) / 100,
+      p_party_id: positiveId(formData.get('party_id')),
+      p_entry_type: clean(formData.get('entry_type'), 30),
+      p_overhead_category_id: positiveId(formData.get('overhead_category_id')),
+      p_description: clean(formData.get('description'), 500),
+    })
+    if (error) throw error
+    refreshUserPages()
+    refreshAdminPages()
+    return ok('Entry updated.')
+  } catch (error) {
+    console.error('adminEditEntryAction', error)
+    return bad('Unable to update the entry. Check the amount and selected name or cost type.')
+  }
+}
+
 export async function loginAction(_previous, formData) {
   const username = clean(formData.get('username'), 40)?.toLowerCase()
   const password = String(formData.get('password') || '')
@@ -61,7 +93,7 @@ export async function loginAction(_previous, formData) {
     await supabase.auth.signOut()
     return bad('Your account profile is not available. Contact an administrator.')
   }
-  redirect(profile.role === 'superadmin' ? '/admin' : '/dashboard')
+  redirect(profile.role === 'superadmin' ? '/admin/summary' : '/dashboard')
 }
 
 export async function logoutAction() {

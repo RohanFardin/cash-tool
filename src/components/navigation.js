@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
-import { Home, ListPlus, PieChart, Menu, X, Banknote, UsersRound, Truck, ShoppingBasket, ReceiptText, Bike, LogOut, LayoutDashboard, ClipboardList, UserCog } from 'lucide-react'
+import { Home, ListPlus, PieChart, Menu, X, Banknote, UsersRound, Truck, ShoppingBasket, ReceiptText, Bike, LogOut, UserCog } from 'lucide-react'
 import { logoutAction } from '@/app/actions'
 
 const entries = [
@@ -34,7 +34,7 @@ export function UserNavigation({ name }) {
 
 export function AdminNavigation({ name }) {
   const [open, setOpen] = useState(false)
-  const links = [['/admin', 'Overview', LayoutDashboard], ['/admin/reports', 'Daily Reports', ClipboardList], ['/admin/transactions', 'Transactions', ReceiptText], ['/admin/users', 'Users', UserCog]]
+  const links = [['/admin/summary', 'Daily Summary', PieChart], ...entries.map(([href, label, Icon]) => [`/admin${href}`, label, Icon]), ['/admin/users', 'Users', UserCog]]
   return <>
     <header className="mobile-header"><div><strong>Admin Console</strong><small>{name}</small></div><button className="icon-button" onClick={() => setOpen(true)}><Menu /></button></header>
     {open && <button className="drawer-backdrop" onClick={() => setOpen(false)} />}
@@ -43,5 +43,6 @@ export function AdminNavigation({ name }) {
       <nav>{links.map(([href, label, Icon]) => <Item key={href} href={href} label={label} Icon={Icon} onClick={() => setOpen(false)} />)}</nav>
       <form action={logoutAction}><button className="nav-link logout"><LogOut size={20} />Logout</button></form>
     </aside>
+    <nav className="bottom-nav admin-bottom-nav"><Item href="/admin/summary" label="Summary" Icon={PieChart} /><Item href="/admin/cash-sales" label="Cash Sales" Icon={Banknote} /><button onClick={() => setOpen(true)} className="nav-link"><Menu size={20} /><span>Menu</span></button></nav>
   </>
 }

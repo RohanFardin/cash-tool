@@ -18,6 +18,6 @@ export async function requireUser() {
 
 export async function requireRole(role) {
   const viewer = await requireUser()
-  if (viewer.profile.role !== role) redirect(viewer.profile.role === 'superadmin' ? '/admin' : '/dashboard')
+  if (viewer.profile.role !== role) redirect(viewer.profile.role === 'superadmin' ? '/admin/summary' : '/dashboard')
   return viewer
 }

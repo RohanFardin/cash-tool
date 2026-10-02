@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { historyFilters, historyUrl } from '../src/lib/history.js'
+import { historyFilters, historyUrl, validHistoryDate } from '../src/lib/history.js'
 import { businessDate } from '../src/lib/format.js'
 
 test('Bangladesh midnight changes the dashboard business day', () => {
@@ -19,4 +19,11 @@ test('paging preserves the selected person or company', () => {
   assert.equal(historyUrl('/credit-recovery', 2, 3), '/credit-recovery?party=3&page=2')
   assert.equal(historyUrl('/supplier', 1, 3), '/supplier?party=3')
   assert.equal(historyUrl('/cash-sales', 1, null), '/cash-sales')
+})
+
+test('admin history dates are real dates and survive paging', () => {
+  assert.equal(validHistoryDate('2026-02-30'), null)
+  assert.equal(validHistoryDate('2026-10-02'), '2026-10-02')
+  assert.equal(validHistoryDate(['2026-10-02']), null)
+  assert.equal(historyUrl('/admin/credit-recovery', 2, 3, '2026-10-02'), '/admin/credit-recovery?party=3&date=2026-10-02&page=2')
 })
