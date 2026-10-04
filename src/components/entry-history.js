@@ -16,7 +16,7 @@ export async function EntryHistory({ category, searchParams, admin = false }) {
     <div className="history-totals card" aria-label="Totals for all matching entries">
       <div><span>Entries</span><strong>{data.totals.entry_count}</strong></div>
       <div><span>{config.primary ? 'Total ' + config.primary : 'Total Amount'}</span><strong>{taka(primary)}</strong></div>
-      {config.secondary && <><div><span>Total {config.secondary}</span><strong>{taka(secondary)}</strong></div><div><span>{config.primary} less {config.secondary.toLowerCase()}</span><strong>{taka(primary - secondary)}</strong></div></>}
+      {config.secondary && <><div><span>Total {config.secondary}</span><strong>{taka(secondary)}</strong></div><div><span>{config.balance || `${config.primary} less ${config.secondary.toLowerCase()}`}</span><strong>{taka(primary - secondary)}</strong></div></>}
     </div>
     <EntryTable entries={data.entries} category={category} totals={data.totals} admin={admin} options={data.options} />
     {data.pages > 1 && <nav className="pagination" aria-label="History pages">{data.page > 1 && <Link className="button secondary" href={historyUrl(path, data.page - 1, data.partyId, data.date)}>Previous</Link>}<span>Page {data.page} of {data.pages}</span>{data.page < data.pages && <Link className="button secondary" href={historyUrl(path, data.page + 1, data.partyId, data.date)}>Next</Link>}</nav>}

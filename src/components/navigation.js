@@ -7,7 +7,7 @@ import { Home, ListPlus, PieChart, Menu, X, Banknote, UsersRound, Truck, Shoppin
 import { logoutAction } from '@/app/actions'
 
 const entries = [
-  ['/cash-sales', 'Cash Sales', Banknote], ['/credit-recovery', 'Credit / Recovery', UsersRound],
+  ['/cash-sales', 'Cash Sales', Banknote], ['/credit-recovery', 'Due / Recovery', UsersRound],
   ['/supplier', 'Supplier', Truck], ['/local-supplier', 'Local Supplier', ShoppingBasket],
   ['/overhead-cost', 'Overhead Cost', ReceiptText], ['/conveyance', 'Conveyance', Bike],
 ]

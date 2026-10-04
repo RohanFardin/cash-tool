@@ -1,21 +1,15 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useActionState, useEffect, useState } from 'react'
 import { Pencil, Plus, Trash2, X } from 'lucide-react'
-import { saveCashSalesAction, submitReportAction, adminSaveTransactionAction, adminDeleteTransactionAction } from '@/app/actions'
+import { submitReportAction, adminSaveTransactionAction, adminDeleteTransactionAction } from '@/app/actions'
 import { approveReportAction } from '@/app/actions'
 import { adminUpdateReportAction } from '@/app/actions'
 import { ActionMessage, SubmitButton } from '@/components/action-ui'
 import { taka } from '@/lib/format'
 
-export function CashSalesForm({ locked }) {
-  const [state, action] = useActionState(saveCashSalesAction, null)
-  if (locked) return null
-  return <form action={action} className="quick-amount-form"><label><span>Enter Amount</span><div className="money-input"><b>৳</b><input name="cash_sales" type="number" inputMode="decimal" min="0.01" step="0.01" required /></div></label><SubmitButton>Add Cash Sales</SubmitButton><ActionMessage state={state} /></form>
-}
-
 const labels = {
-  credit: { title: 'Credit Sales / Recovery', button: 'Add Entry', name: 'Person Name' },
+  credit: { title: 'Due Amount / Due Recovery', button: 'Add Entry', name: 'Person Name' },
   supplier_payment: { title: 'Supplier Payments', button: 'Add Supplier Payment', name: 'Supplier Name' },
   cash_purchase: { title: 'Cash Purchases', button: 'Add Cash Purchase', name: 'Seller / Retailer / Supplier' },
   overhead: { title: 'Overhead Costs', button: 'Add Expense', name: 'Expense Name' },
@@ -28,7 +22,7 @@ function EntryForm({ category, initial, onClose, admin = false, reportId }) {
   return <form action={action} className="entry-form">
     <input type="hidden" name="category" value={category} /><input type="hidden" name="id" value={initial?.id || ''} />{admin && <input type="hidden" name="report_id" value={reportId} />}
     <label><span>{config.name}</span><input name="name" defaultValue={initial?.name || ''} maxLength="150" required autoFocus /></label>
-    {category === 'credit' && <label><span>Transaction Type</span><select name="transaction_subtype" defaultValue={initial?.transaction_subtype || 'credit_sale'}><option value="credit_sale">Credit Sale</option><option value="credit_recovery">Credit Recovery</option></select></label>}
+    {category === 'credit' && <label><span>Transaction Type</span><select name="transaction_subtype" defaultValue={initial?.transaction_subtype || 'credit_sale'}><option value="credit_sale">Due Amount</option><option value="credit_recovery">Due Recovery</option></select></label>}
     <label><span>Amount</span><div className="money-input"><b>৳</b><input name="amount" type="number" inputMode="decimal" min="0.01" step="0.01" defaultValue={initial?.amount || ''} required /></div></label>
     <label><span>Optional Note</span><textarea name="description" rows="3" maxLength="500" defaultValue={initial?.description || ''} /></label>
     <ActionMessage state={state} /><div className="form-actions"><button type="button" className="button ghost" onClick={onClose}>Cancel</button><SubmitButton>{initial ? 'Update Entry' : 'Add Entry'}</SubmitButton></div>
@@ -50,11 +44,17 @@ export function TransactionManager({ category, entries, locked = false, admin = 
   </>
 }
 
-export function SubmitReport({ status }) {
+export function SubmitReport({ status, entries = [], onSubmitted }) {
   const [open, setOpen] = useState(false)
   const [state, action] = useActionState(submitReportAction, null)
+  useEffect(() => {
+    if (state?.ok) {
+      setOpen(false)
+      onSubmitted?.()
+    }
+  }, [state, onSubmitted])
   if (status !== 'draft') return <p className="notice success">This report is {status} and locked for storekeepers.</p>
-  return <><ActionMessage state={state} /><button className="button primary full" onClick={() => setOpen(true)}>Submit Today's Report</button>{open && <div className="modal-backdrop"><div className="modal confirm-modal"><h2>Submit today's report?</h2><p>Submitting closes today's entry forms and makes your summary available.</p><form action={action}><input type="hidden" name="confirm" value="yes" /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setOpen(false)}>Cancel</button><SubmitButton pendingText="Submitting…">Yes, Submit</SubmitButton></div></form></div></div>}</>
+  return <><ActionMessage state={state} /><button type="button" className="button primary full" onClick={() => setOpen(true)}>Submit Today's Report</button>{open && <div className="modal-backdrop"><div className="modal confirm-modal"><h2>Submit today's report?</h2><p>{entries.length} temporary {entries.length === 1 ? 'entry' : 'entries'} will be saved. Submitting then locks the report.</p><form action={action}><input type="hidden" name="confirm" value="yes" /><input type="hidden" name="staged_entries" value={JSON.stringify(entries)} /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setOpen(false)}>Cancel</button><SubmitButton pendingText="Submitting…">Yes, Submit</SubmitButton></div></form></div></div>}</>
 }
 
 export function ApproveReport({ id, status }) {

@@ -7,7 +7,7 @@ import { ActionMessage, SubmitButton } from '@/components/action-ui'
 import { historyCategories } from '@/lib/history'
 import { businessDate, dateTime, formatDate, taka } from '@/lib/format'
 
-const typeLabels = { cash_sale: 'Cash Sale', previous_total: 'Previous Daily Total', adjustment: 'Adjustment', credit_sale: 'Credit Sale', credit_recovery: 'Recovery', purchase: 'Purchase', payment: 'Payment' }
+const typeLabels = { cash_sale: 'Cash Sale', previous_total: 'Previous Daily Total', adjustment: 'Adjustment', credit_sale: 'Due Amount', credit_recovery: 'Due Recovery', purchase: 'Purchase', payment: 'Payment' }
 
 function EditEntry({ entry, options, onClose }) {
   const config = historyCategories[entry.category]
@@ -20,7 +20,7 @@ function EditEntry({ entry, options, onClose }) {
     return () => document.removeEventListener('keydown', close)
   }, [onClose])
   const legacyPayment = entry.source === 'transaction' && entry.category === 'supplier'
-  const types = entry.category === 'credit' ? [['credit_sale', 'Credit Sale'], ['credit_recovery', 'Recovery']]
+  const types = entry.category === 'credit' ? [['credit_sale', 'Due Amount'], ['credit_recovery', 'Due Recovery']]
     : legacyPayment ? [['payment', 'Payment']] : [['purchase', 'Purchase'], ['payment', 'Payment']]
   return <div className="modal-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <div className="modal" role="dialog" aria-modal="true" aria-labelledby={heading}>
@@ -41,14 +41,14 @@ function EditEntry({ entry, options, onClose }) {
 export function EntryTable({ entries, category = null, admin = false, options = {}, totals = null }) {
   const [editing, setEditing] = useState(null)
   const config = category ? historyCategories[category] : null
-  const columns = ['Date & Time', ...(!config ? ['Section', 'Name', 'Entry Type'] : config.party ? [config.party] : config.name ? [config.name] : []), ...(config?.primary ? [config.primary, config.secondary] : [config?.amount || 'Amount']), ...(admin ? ['Actions'] : [])]
+  const columns = ['Date & Time', ...(!config ? ['Section', 'Name', 'Entry Type', 'Phone Number', 'Notes'] : config.party ? [config.party, 'Phone Number', 'Notes'] : config.name ? [config.name] : []), ...(config?.primary ? [config.primary, config.secondary] : [config?.amount || 'Amount']), ...(admin ? ['Actions'] : [])]
   const totalLabelColumns = columns.length - (config?.primary ? 2 : 1) - (admin ? 1 : 0)
   return <>
     <div className="data-table-wrap ledger-table-wrap"><table className="data-table ledger-table"><thead><tr>{columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>
       {entries.map((entry) => <tr key={`${entry.source}-${entry.id}`}>
         <td><time dateTime={entry.created_at}>{dateTime(entry.created_at)}</time>{entry.business_date !== businessDate(new Date(entry.created_at)) && <small className="history-note">Report: {formatDate(entry.business_date)}</small>}{admin && entry.updated_at && entry.updated_at !== entry.created_at && <small className="history-note">Edited {dateTime(entry.updated_at)}</small>}</td>
-        {!config && <><td>{historyCategories[entry.category]?.title}</td><td>{entry.party_name || '—'}</td><td>{typeLabels[entry.entry_type] || historyCategories[entry.category]?.title}</td></>}
-        {config?.party && <td>{entry.party_name}</td>}{config?.name && <td>{entry.party_name}</td>}
+        {!config && <><td>{historyCategories[entry.category]?.title}</td><td>{entry.party_name || '—'}</td><td>{typeLabels[entry.entry_type] || historyCategories[entry.category]?.title}</td><td>{entry.phone_number || '—'}</td><td className="text-cell">{entry.description || '—'}</td></>}
+        {config?.party && <><td>{entry.party_name}</td><td>{entry.phone_number || '—'}</td><td className="text-cell">{entry.description || '—'}</td></>}{config?.name && <td>{entry.party_name}</td>}
         {config?.primary ? <><td className="number-cell">{entry.entry_type === config.primaryType ? taka(entry.amount) : '—'}</td><td className="number-cell">{entry.entry_type !== config.primaryType ? taka(entry.amount) : '—'}</td></> : <td className="number-cell">{taka(entry.amount)}{entry.entry_type === 'previous_total' && <small className="history-note">Previous daily total</small>}{entry.entry_type === 'adjustment' && <small className="history-note">Adjustment</small>}</td>}
         {admin && <td><button type="button" className="button secondary table-edit" aria-label={`Edit ${historyCategories[entry.category]?.title} entry ${entry.id}`} onClick={() => setEditing(entry)}><Pencil size={15} />Edit</button></td>}
       </tr>)}

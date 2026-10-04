@@ -2,7 +2,7 @@ export const HISTORY_PAGE_SIZE = 50
 
 export const historyCategories = {
   cash_sales: { title: 'Cash Sales', path: '/cash-sales', amount: 'Amount' },
-  credit: { title: 'Credit Sales / Recovery', path: '/credit-recovery', party: 'Person Name', table: 'customers', primary: 'Credit Sales', secondary: 'Recovery', primaryType: 'credit_sale' },
+  credit: { title: 'Due Amount / Due Recovery', path: '/credit-recovery', party: 'Person Name', table: 'customers', primary: 'Due Amount', secondary: 'Due Recovery', balance: 'Remaining Due Amount', primaryType: 'credit_sale' },
   supplier: { title: 'Supplier', path: '/supplier', party: 'Company Name', table: 'suppliers', primary: 'Purchases', secondary: 'Payments', primaryType: 'purchase' },
   cash_purchase: { title: 'Local Supplier', path: '/local-supplier', amount: 'Amount' },
   overhead: { title: 'Overhead Cost', path: '/overhead-cost', name: 'Overhead Name', amount: 'Cost Amount' },

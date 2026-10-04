@@ -68,14 +68,19 @@ export async function getTodayReport() {
 export async function getDailyEntryPortal() {
   const supabase = await createClient()
   const today = await getTodayReport()
-  const [customersResult, suppliersResult, overheadResult, profilesResult] = await Promise.all([
+  const currentDate = new Date(`${today.date}T00:00:00Z`)
+  currentDate.setUTCDate(currentDate.getUTCDate() - 1)
+  const previousDate = currentDate.toISOString().slice(0, 10)
+  const [customersResult, suppliersResult, overheadResult, profilesResult, previousReportResult] = await Promise.all([
     supabase.from('customer_balances').select('*').eq('active', true).order('name'),
     supabase.from('supplier_balances').select('*').eq('active', true).order('name'),
     supabase.from('overhead_categories').select('id, name').eq('active', true).order('name'),
     supabase.from('profiles').select('id, full_name, username'),
+    supabase.from('daily_reports').select('business_date, cash_in_hand, status')
+      .eq('business_date', previousDate).in('status', ['submitted', 'approved']).maybeSingle(),
   ])
-  if (customersResult.error || suppliersResult.error || overheadResult.error || profilesResult.error) {
-    throw new Error('Unable to load daily entry options. Make sure migration 004 is applied.')
+  if (customersResult.error || suppliersResult.error || overheadResult.error || profilesResult.error || previousReportResult.error) {
+    throw new Error('Unable to load daily entry options. Make sure all migrations are applied.')
   }
   const names = new Map((profilesResult.data || []).map((profile) => [profile.id, profile.full_name || profile.username]))
   const addCreator = (rows) => rows.map((row) => ({
@@ -92,6 +97,8 @@ export async function getDailyEntryPortal() {
     supplierEntries: addCreator(today.supplierEntries),
     transactions: addCreator(today.transactions),
     cashEntries: addCreator(today.cashEntries),
+    previousDate,
+    previousCashInHand: previousReportResult.data?.cash_in_hand ?? null,
   }
 }
 

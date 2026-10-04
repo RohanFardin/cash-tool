@@ -12,15 +12,19 @@ const secondUserId = '33333333-3333-4333-8333-333333333333'
 const adminId = '22222222-2222-4222-8222-222222222222'
 const timestamp = new Date().toISOString()
 const today = businessDate()
+const yesterdayValue = new Date(`${today}T00:00:00Z`)
+yesterdayValue.setUTCDate(yesterdayValue.getUTCDate() - 1)
+const yesterday = yesterdayValue.toISOString().slice(0, 10)
 const profile = { id: userId, full_name: 'Storekeeper', username: 'user', role: 'user' }
 const profiles = [profile, { ...profile, id: secondUserId, full_name: 'Second Storekeeper', username: 'user2' }, { ...profile, id: adminId, full_name: 'Administrator', username: 'admin', role: 'superadmin' }]
 const user = { id: userId, aud: 'authenticated', role: 'authenticated', email: 'user@pharmacy.local', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: timestamp }
 const report = { id: 1, business_date: today, status: 'draft', cash_sales: 100, updated_at: timestamp, submitted_at: timestamp }
 const previousDate = '2020-01-01'
 const previousReport = { ...report, id: 2, business_date: previousDate, status: 'submitted', cash_sales: 200 }
+const yesterdayReport = { ...report, id: 3, business_date: yesterday, status: 'submitted', cash_sales: 100, cash_in_hand: -50 }
 const base = { daily_report_id: 1, amount: 100, created_by: userId, created_at: timestamp }
 const datasets = {
-  profiles, daily_reports: [report, previousReport],
+  profiles, daily_reports: [report, previousReport, yesterdayReport],
   admin_report_summary: [
     { id: 1, business_date: today, cash_sales: 100, credit_sales: 100, credit_recovery: 0, supplier_purchases: 100, supplier_payments: 0, cash_purchases: 100, overhead_cost: 100, conveyance: 100 },
     { id: 2, business_date: previousDate, cash_sales: 200, credit_sales: 0, credit_recovery: 0, supplier_purchases: 0, supplier_payments: 0, cash_purchases: 0, overhead_cost: 0, conveyance: 0 },
@@ -108,7 +112,7 @@ try {
     } catch { await new Promise((resolve) => setTimeout(resolve, 250)) }
   }
   assert.ok(ready, 'Next.js server started')
-  for (const [path, title] of [['/cash-sales', 'Cash Sales'], ['/credit-recovery', 'Credit Sales / Recovery'], ['/supplier', 'Supplier'], ['/local-supplier', 'Local Supplier'], ['/overhead-cost', 'Overhead Cost'], ['/conveyance', 'Conveyance']]) {
+  for (const [path, title] of [['/cash-sales', 'Cash Sales'], ['/credit-recovery', 'Due Amount / Due Recovery'], ['/supplier', 'Supplier'], ['/local-supplier', 'Local Supplier'], ['/overhead-cost', 'Overhead Cost'], ['/conveyance', 'Conveyance']]) {
     const response = await fetch(`${appUrl}${path}`, { headers })
     const html = htmlOnly(await response.text())
     assert.equal(response.status, 200, path)
@@ -116,6 +120,7 @@ try {
     assert.ok(html.includes('Date &amp; Time'), `${path} shows entry timestamps`)
     assert.ok(!html.includes('name="amount"') && !html.includes('name="cash_sales"'), `${path} has no entry forms`)
     assert.ok(html.includes('ledger-table') && html.includes('<thead>') && html.includes('<tfoot>'), `${path} preserves table headers and totals`)
+    if (path === '/credit-recovery' || path === '/supplier') assert.ok(html.includes('Phone Number') && html.includes('Notes'), `${path} shows contact numbers and notes`)
     assert.ok(!html.includes('table-edit'), `${path} has no user edit controls`)
     console.log(`PASS ${path}: read-only history`)
   }
@@ -130,7 +135,8 @@ try {
   assert.ok(draftSummary.headers.get('location') === '/dashboard' || draftBody.includes('url=/dashboard'), 'draft summary redirects to dashboard')
   console.log('PASS /summary: draft report is unavailable')
   const dashboard = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
-  assert.ok(dashboard.includes('Cash Earned Today') && dashboard.includes('<h2>Credit Sales</h2>'))
+  assert.ok(dashboard.includes('Cash earned today') && dashboard.includes('<h2>Due Amount</h2>'))
+  assert.ok(dashboard.includes('Calculate Cash in Hand') && dashboard.includes('previous-cash-card card negative'))
   assert.ok(!dashboard.includes('mini-totals') && !dashboard.includes('Edit entry') && !dashboard.includes('Delete entry'))
   assert.ok(dashboard.includes('Search company name'))
   console.log('PASS /dashboard: updated titles, supplier search, permanent entries')
@@ -143,6 +149,7 @@ try {
   assert.ok(!adminDraft.includes('Financial Overview'))
   console.log('PASS admin summary: draft report withheld and no dashboard')
   report.status = 'submitted'
+  report.cash_in_hand = 0
   const submitted = htmlOnly(await (await fetch(`${appUrl}/summary`, { headers })).text())
   assert.ok(submitted.includes('Submitted Summary'))
   const locked = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
@@ -150,7 +157,7 @@ try {
   console.log('PASS submission: summary available and entry forms closed')
   report.business_date = '2020-01-01'
   const nextDay = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
-  assert.ok(nextDay.includes('No cash sales entries today.') && nextDay.includes('No credit entries today.'))
+  assert.ok(nextDay.includes('No cash sales entries today.') && nextDay.includes('No due entries today.'))
   console.log('PASS dashboard: previous days disappear from today')
   report.business_date = today
   for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {

@@ -21,12 +21,12 @@ async function cash(amount, report = todayId) {
   return db.query('insert into public.cash_sales_entries (daily_report_id, amount, created_by) values ($1, $2, $3) returning *', [report, amount, operator])
 }
 
-async function credit(type, amount, party = customerId) {
-  return db.query('insert into public.customer_ledger_entries (daily_report_id, customer_id, entry_type, amount, created_by, updated_by) values ($1,$2,$3,$4,$5,$5) returning *', [todayId, party, type, amount, operator])
+async function credit(type, amount, party = customerId, phone = null, description = null) {
+  return db.query('insert into public.customer_ledger_entries (daily_report_id, customer_id, entry_type, amount, created_by, updated_by, phone_number, description) values ($1,$2,$3,$4,$5,$5,$6,$7) returning *', [todayId, party, type, amount, operator, phone, description])
 }
 
-async function supplier(type, amount) {
-  return db.query('insert into public.supplier_ledger_entries (daily_report_id, supplier_id, entry_type, amount, created_by, updated_by) values ($1,$2,$3,$4,$5,$5) returning *', [todayId, supplierId, type, amount, operator])
+async function supplier(type, amount, phone = null, description = null) {
+  return db.query('insert into public.supplier_ledger_entries (daily_report_id, supplier_id, entry_type, amount, created_by, updated_by, phone_number, description) values ($1,$2,$3,$4,$5,$5,$6,$7) returning *', [todayId, supplierId, type, amount, operator, phone, description])
 }
 
 async function expense(category, amount) {
@@ -188,6 +188,70 @@ test('supplier history separates purchases from payments', async () => {
   assert.equal(Number(summary.secondary_total), 350)
 })
 
+test('contact numbers and notes remain visible in customer and supplier history', async () => {
+  await credit('credit_recovery', 125, customerId, '01700111222', 'Paid at counter')
+  await supplier('payment', 225, '01800999888', 'Invoice 42')
+  const customer = (await db.query("select * from public.entry_history where category='credit' and phone_number is not null")).rows[0]
+  const company = (await db.query("select * from public.entry_history where category='supplier' and phone_number is not null")).rows[0]
+  assert.equal(customer.phone_number, '01700111222')
+  assert.equal(customer.description, 'Paid at counter')
+  assert.equal(company.phone_number, '01800999888')
+  assert.equal(company.description, 'Invoice 42')
+})
+
+test('cash in hand is null in draft and stored from the requested formula on submission', async () => {
+  await cash(1000)
+  await credit('credit_sale', 200)
+  await credit('credit_recovery', 150)
+  await supplier('purchase', 500)
+  await supplier('payment', 100)
+  await expense('cash_purchase', 75)
+  await expense('overhead', 25)
+  await expense('conveyance', 10)
+  assert.equal((await db.query('select cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0].cash_in_hand, null)
+  await submit()
+  const saved = (await db.query('select cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0]
+  assert.equal(Number(saved.cash_in_hand), 940)
+})
+
+test('staged submission saves every category atomically and then locks the report', async () => {
+  const staged = [
+    { kind: 'cash', amount: 1000 },
+    { kind: 'customer', party_id: customerId, entry_type: 'credit_sale', amount: 200, phone_number: '01710000000', description: 'Due note' },
+    { kind: 'customer', party_id: customerId, entry_type: 'credit_recovery', amount: 150, phone_number: '01710000000', description: 'Recovery note' },
+    { kind: 'supplier', party_id: supplierId, entry_type: 'purchase', amount: 500, phone_number: '01810000000', description: 'Purchase note' },
+    { kind: 'supplier', party_id: supplierId, entry_type: 'payment', amount: 100, phone_number: '01810000000', description: 'Payment note' },
+    { kind: 'transaction', category: 'cash_purchase', amount: 75 },
+    { kind: 'transaction', category: 'overhead', overhead_category_id: overheadId, amount: 25 },
+    { kind: 'transaction', category: 'conveyance', amount: 10 },
+  ]
+  await db.query('select public.submit_staged_report(public.current_business_date(),$1::jsonb)', [JSON.stringify(staged)])
+  const report = (await db.query('select status, cash_sales, cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0]
+  assert.equal(report.status, 'submitted')
+  assert.equal(Number(report.cash_sales), 1000)
+  assert.equal(Number(report.cash_in_hand), 940)
+  assert.equal(Number((await db.query('select count(*) from public.entry_history where business_date=public.current_business_date()')).rows[0].count), 8)
+  const customer = (await db.query("select phone_number, description from public.entry_history where category='credit' and entry_type='credit_recovery'")).rows[0]
+  assert.deepEqual(customer, { phone_number: '01710000000', description: 'Recovery note' })
+})
+
+test('an invalid staged batch rolls back every entry and leaves the report open', async () => {
+  const staged = [{ kind: 'cash', amount: 100 }, { kind: 'unknown', amount: 10 }]
+  await db.exec('savepoint invalid_staged_batch')
+  await assert.rejects(
+    db.query('select public.submit_staged_report(public.current_business_date(),$1::jsonb)', [JSON.stringify(staged)]),
+    /Invalid staged entry type/,
+  )
+  await db.exec('rollback to savepoint invalid_staged_batch')
+  assert.equal(Number((await db.query('select count(*) from public.cash_sales_entries where daily_report_id=$1', [todayId])).rows[0].count), 0)
+  assert.equal((await db.query('select status from public.daily_reports where id=$1', [todayId])).rows[0].status, 'draft')
+})
+
+test('storekeepers can add supplier companies with a phone number and notes', async () => {
+  const company = (await db.query("insert into public.suppliers (name,phone_number,notes,opening_due,created_by) values ('New Company','01910000000','New supplier',0,$1) returning name,phone_number,notes", [operator])).rows[0]
+  assert.deepEqual(company, { name: 'New Company', phone_number: '01910000000', notes: 'New supplier' })
+})
+
 test('local supplier, overhead and conveyance history retains each entry', async () => {
   for (const category of ['cash_purchase', 'overhead', 'conveyance']) {
     await expense(category, 25)
@@ -206,6 +270,7 @@ test('administrator cash corrections preserve history and report totals', async 
   assert.equal(await total(), 80)
   const adjustment = (await db.query("select * from public.cash_sales_entries where daily_report_id=$1 and entry_type='adjustment'", [todayId])).rows[0]
   assert.equal(Number(adjustment.amount), -20)
+  assert.equal(Number((await db.query('select cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0].cash_in_hand), 80)
   const summary = (await db.query("select * from public.entry_history_totals('cash_sales',null)")).rows[0]
   assert.equal(Number(summary.primary_total), 480) // previous day's 400 + corrected 80
 })
@@ -261,7 +326,9 @@ test('administrators can edit every submitted category in place', async () => {
   const customerTotals = (await db.query("select * from public.entry_history_totals('credit',null,public.current_business_date())")).rows[0]
   assert.equal(Number(customerTotals.primary_total), 0)
   assert.equal(Number(customerTotals.secondary_total), 210)
-  assert.equal((await db.query('select status from public.daily_reports where id=$1', [todayId])).rows[0].status, 'submitted')
+  const editedReport = (await db.query('select status, cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0]
+  assert.equal(editedReport.status, 'submitted')
+  assert.equal(Number(editedReport.cash_in_hand), -110)
 })
 
 test('operators cannot call the administrator entry editor', async () => {

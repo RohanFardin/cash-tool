@@ -24,23 +24,6 @@ function clean(value, max = 250) {
   return result ? result.slice(0, max) : null
 }
 
-async function ensureTodayReport(supabase, userId) {
-  const today = businessDate()
-  const { data: current } = await supabase.from('daily_reports').select('*').eq('business_date', today).maybeSingle()
-  if (current) return current
-  const { data, error } = await supabase.from('daily_reports').insert({
-    business_date: today, submitted_by: userId, status: 'draft', cash_sales: 0,
-  }).select().single()
-  if (error?.code === '23505') {
-    const { data: concurrent, error: concurrentError } = await supabase
-      .from('daily_reports').select('*').eq('business_date', today).single()
-    if (concurrentError) throw concurrentError
-    return concurrent
-  }
-  if (error) throw error
-  return data
-}
-
 function refreshUserPages() {
   ['/dashboard', '/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance', '/summary']
     .forEach((path) => revalidatePath(path))
@@ -102,32 +85,6 @@ export async function logoutAction() {
   redirect('/login')
 }
 
-export async function saveCashSalesAction(_previous, formData) {
-  const { user } = await requireRole('user')
-  const value = amount(formData.get('cash_sales'))
-  if (value === null) return bad('Amount must be greater than zero.')
-  try {
-    const supabase = await createClient()
-    const report = await ensureTodayReport(supabase, user.id)
-    if (report.status !== 'draft') return bad('This report has been submitted and is locked.')
-    const { error } = await supabase.from('cash_sales_entries').insert({
-      daily_report_id: report.id, amount: value, created_by: user.id,
-    })
-    if (error) throw error
-    refreshUserPages()
-    return ok('Cash sales entry added.')
-  } catch (error) {
-    console.error('saveCashSalesAction', error)
-    return bad('Unable to save cash sales. Please try again.')
-  }
-}
-
-async function editableTodayReport(supabase, userId) {
-  const report = await ensureTodayReport(supabase, userId)
-  if (report.status !== 'draft') return { error: 'Today’s report has been submitted and is locked.' }
-  return { report }
-}
-
 function positiveId(value) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
@@ -136,12 +93,14 @@ function positiveId(value) {
 export async function addCustomerAction(_previous, formData) {
   const { user } = await requireRole('user')
   const name = clean(formData.get('name'), 150)
+  const phoneNumber = clean(formData.get('phone_number'), 30)
+  const notes = clean(formData.get('notes'), 500)
   if (!name) return bad('Enter the customer’s name.')
   try {
     const supabase = await createClient()
     const { data, error } = await supabase.from('customers').insert({
-      name, opening_due: 0, created_by: user.id,
-    }).select('id, name').single()
+      name, phone_number: phoneNumber, notes, opening_due: 0, created_by: user.id,
+    }).select('id, name, phone_number, notes').single()
     if (error) {
       if (error.code === '23505') return bad('That customer already exists. Select the name from search.')
       throw error
@@ -154,34 +113,26 @@ export async function addCustomerAction(_previous, formData) {
   }
 }
 
-export async function saveCustomerLedgerAction(_previous, formData) {
+export async function addSupplierAction(_previous, formData) {
   const { user } = await requireRole('user')
-  if (formData.get('id')) return bad('Saved entries cannot be edited.')
-  const customerId = positiveId(formData.get('customer_id'))
-  const entryType = String(formData.get('entry_type') || '')
-  const value = amount(formData.get('amount'))
-  const description = clean(formData.get('description'), 500)
-  if (!customerId) return bad('Select a customer first.')
-  if (!['credit_sale', 'credit_recovery'].includes(entryType)) return bad('Select sale or recovery.')
-  if (value === null) return bad('Amount must be greater than zero.')
+  const name = clean(formData.get('name'), 150)
+  const phoneNumber = clean(formData.get('phone_number'), 30)
+  const notes = clean(formData.get('notes'), 500)
+  if (!name) return bad('Enter the company name.')
   try {
     const supabase = await createClient()
-    const [{ report, error: reportError }, customerResult] = await Promise.all([
-      editableTodayReport(supabase, user.id),
-      supabase.from('customers').select('id').eq('id', customerId).eq('active', true).maybeSingle(),
-    ])
-    if (reportError) return bad(reportError)
-    if (!customerResult.data) return bad('That customer is not available.')
-    const values = { customer_id: customerId, entry_type: entryType, amount: value, description }
-    const { error } = await supabase.from('customer_ledger_entries').insert({
-      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
-    })
-    if (error) throw error
+    const { data, error } = await supabase.from('suppliers').insert({
+      name, phone_number: phoneNumber, notes, opening_due: 0, created_by: user.id,
+    }).select('id, name, phone_number, notes').single()
+    if (error) {
+      if (error.code === '23505') return bad('That company already exists. Select it from search.')
+      throw error
+    }
     refreshUserPages()
-    return ok('Credit entry added.')
+    return { ...ok(`${data.name} added.`), supplier: data }
   } catch (error) {
-    console.error('saveCustomerLedgerAction', error)
-    return bad('Unable to save the credit entry. Please try again.')
+    console.error('addSupplierAction', error)
+    return bad('Unable to add the company. Please try again.')
   }
 }
 
@@ -190,102 +141,9 @@ export async function deleteCustomerLedgerAction(_previous, formData) {
   return bad('Saved entries cannot be deleted.')
 }
 
-export async function saveSupplierLedgerAction(_previous, formData) {
-  const { user } = await requireRole('user')
-  if (formData.get('id')) return bad('Saved entries cannot be edited.')
-  const supplierId = positiveId(formData.get('supplier_id'))
-  const entryType = String(formData.get('entry_type') || '')
-  const value = amount(formData.get('amount'))
-  const description = clean(formData.get('description'), 500)
-  if (!supplierId) return bad('Select a supplier first.')
-  if (!['purchase', 'payment'].includes(entryType)) return bad('Select purchase or payment.')
-  if (value === null) return bad('Amount must be greater than zero.')
-  try {
-    const supabase = await createClient()
-    const [{ report, error: reportError }, supplierResult] = await Promise.all([
-      editableTodayReport(supabase, user.id),
-      supabase.from('suppliers').select('id').eq('id', supplierId).eq('active', true).maybeSingle(),
-    ])
-    if (reportError) return bad(reportError)
-    if (!supplierResult.data) return bad('That supplier is not available.')
-    const values = { supplier_id: supplierId, entry_type: entryType, amount: value, description }
-    const { error } = await supabase.from('supplier_ledger_entries').insert({
-      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
-    })
-    if (error) throw error
-    refreshUserPages()
-    return ok('Supplier entry added.')
-  } catch (error) {
-    console.error('saveSupplierLedgerAction', error)
-    return bad('Unable to save the supplier entry. Please try again.')
-  }
-}
-
 export async function deleteSupplierLedgerAction(_previous, formData) {
   await requireRole('user')
   return bad('Saved entries cannot be deleted.')
-}
-
-export async function saveAmountEntryAction(_previous, formData) {
-  const { user } = await requireRole('user')
-  if (formData.get('id')) return bad('Saved entries cannot be edited.')
-  const category = String(formData.get('category') || '')
-  const value = amount(formData.get('amount'))
-  if (!['cash_purchase', 'conveyance'].includes(category)) return bad('Invalid entry type.')
-  if (value === null) return bad('Amount must be greater than zero.')
-  try {
-    const supabase = await createClient()
-    const { report, error: reportError } = await editableTodayReport(supabase, user.id)
-    if (reportError) return bad(reportError)
-    const values = {
-      category,
-      transaction_subtype: null,
-      name: category === 'cash_purchase' ? 'Local Supplier' : 'Conveyance',
-      amount: value,
-      description: null,
-      overhead_category_id: null,
-    }
-    const { error } = await supabase.from('transactions').insert({
-      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
-    })
-    if (error) throw error
-    refreshUserPages()
-    return ok('Amount added.')
-  } catch (error) {
-    console.error('saveAmountEntryAction', error)
-    return bad('Unable to save the amount. Please try again.')
-  }
-}
-
-export async function saveOverheadEntryAction(_previous, formData) {
-  const { user } = await requireRole('user')
-  if (formData.get('id')) return bad('Saved entries cannot be edited.')
-  const categoryId = positiveId(formData.get('overhead_category_id'))
-  const value = amount(formData.get('amount'))
-  if (!categoryId) return bad('Select an overhead cost.')
-  if (value === null) return bad('Amount must be greater than zero.')
-  try {
-    const supabase = await createClient()
-    const [{ report, error: reportError }, categoryResult] = await Promise.all([
-      editableTodayReport(supabase, user.id),
-      supabase.from('overhead_categories').select('id, name').eq('id', categoryId).eq('active', true).maybeSingle(),
-    ])
-    if (reportError) return bad(reportError)
-    if (!categoryResult.data) return bad('That overhead option is not available.')
-    const values = {
-      category: 'overhead', transaction_subtype: null, name: categoryResult.data.name,
-      amount: value, description: null, overhead_category_id: categoryId,
-    }
-    const { error } = await supabase.from('transactions').insert({
-      ...values, daily_report_id: report.id, created_by: user.id, updated_by: user.id,
-    })
-    if (error) throw error
-    refreshUserPages()
-    return ok('Overhead cost added.')
-  } catch (error) {
-    console.error('saveOverheadEntryAction', error)
-    return bad('Unable to save the overhead cost. Please try again.')
-  }
 }
 
 function transactionInput(formData) {
@@ -308,15 +166,25 @@ export async function deleteTransactionAction(_previous, formData) {
 }
 
 export async function submitReportAction(_previous, formData) {
-  const { user } = await requireRole('user')
+  await requireRole('user')
   if (formData.get('confirm') !== 'yes') return bad('Please confirm report submission.')
+  const rawEntries = String(formData.get('staged_entries') || '[]')
+  if (rawEntries.length > 250000) return bad('There are too many entries to submit at once.')
+  let entries
+  try {
+    entries = JSON.parse(rawEntries)
+  } catch {
+    return bad('The temporary entries could not be read. Please try again.')
+  }
+  if (!Array.isArray(entries) || entries.length > 500) return bad('The temporary entries are invalid.')
   try {
     const supabase = await createClient()
-    const report = await ensureTodayReport(supabase, user.id)
-    if (report.status !== 'draft') return bad('This report has already been submitted.')
-    const { error } = await supabase.from('daily_reports').update({ status: 'submitted' }).eq('id', report.id)
+    const { error } = await supabase.rpc('submit_staged_report', {
+      p_business_date: businessDate(), p_entries: entries,
+    })
     if (error) throw error
     refreshUserPages()
+    refreshAdminPages()
     return ok('Today’s report submitted successfully.')
   } catch (error) {
     console.error('submitReportAction', error)
