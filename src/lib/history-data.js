@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { historyCategories, historyFilters, validHistoryDate, HISTORY_PAGE_SIZE } from '@/lib/history'
+import { businessDate } from '@/lib/format'
 
 export async function getHistoryRows(category, params = {}, date = null) {
   const filters = historyFilters(params)
@@ -34,6 +35,31 @@ export async function getAdminEntryOptions() {
   return { customers: results[0].data || [], suppliers: results[1].data || [], overhead: results[2].data || [] }
 }
 
+async function getAdminNamesWithoutEntries(category, { page, partyId, date, entries }) {
+  const config = historyCategories[category]
+  if (!config.add || page !== 1) return []
+  const table = config.table || 'overhead_categories'
+  const relation = category === 'credit' ? 'customer_ledger_entries' : category === 'supplier' ? 'supplier_ledger_entries' : 'transactions'
+  const supabase = await createClient()
+  let query = supabase.from(table)
+    .select(`id, name, created_at${config.party ? ', phone_number, notes' : ''}, ${relation}(id)`)
+    .is(relation, null).eq('active', true).order('created_at', { ascending: false }).order('id', { ascending: false })
+  if (partyId) query = query.eq('id', partyId)
+  if (date) {
+    const start = new Date(`${date}T00:00:00+06:00`)
+    query = query.gte('created_at', start.toISOString()).lt('created_at', new Date(start.getTime() + 86400000).toISOString())
+  }
+  const { data, error } = await query
+  if (error) throw new Error('Unable to load saved names.')
+  const entryNames = new Set(entries.map((entry) => entry.party_name?.trim().toLowerCase()))
+  return (data || []).filter((row) => !entryNames.has(row.name.trim().toLowerCase())).map((row) => ({
+    id: row.id, source: `${category}_name`, category, directory_only: true,
+    party_id: config.party ? row.id : null, party_name: row.name,
+    phone_number: row.phone_number, description: row.notes,
+    amount: null, created_at: row.created_at, business_date: businessDate(new Date(row.created_at)),
+  }))
+}
+
 export async function getEntryHistory(category, params = {}, { admin = false } = {}) {
   const config = historyCategories[category]
   const supabase = await createClient()
@@ -45,5 +71,6 @@ export async function getEntryHistory(category, params = {}, { admin = false } =
         return { [config.table]: result.data || [] }
       }) : Promise.resolve({}),
   ])
-  return { ...rows, parties: options[config.table] || [], options }
+  const names = admin ? await getAdminNamesWithoutEntries(category, rows) : []
+  return { ...rows, entries: [...names, ...rows.entries], parties: options[config.table] || [], options }
 }

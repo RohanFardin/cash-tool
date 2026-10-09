@@ -1,5 +1,9 @@
 export const BUSINESS_TIME_ZONE = 'Asia/Dhaka'
 
+export function displayUserName(value) {
+  return String(value || 'User').replace(/\bstorekeeper(s?)\b/gi, (_match, plural) => plural ? 'Users' : 'User')
+}
+
 export function businessDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: BUSINESS_TIME_ZONE,

@@ -2,10 +2,10 @@ export const HISTORY_PAGE_SIZE = 50
 
 export const historyCategories = {
   cash_sales: { title: 'Cash Sales', path: '/cash-sales', amount: 'Amount' },
-  credit: { title: 'Due Amount / Due Recovery', path: '/credit-recovery', party: 'Person Name', table: 'customers', primary: 'Due Amount', secondary: 'Due Recovery', balance: 'Remaining Due Amount', primaryType: 'credit_sale' },
-  supplier: { title: 'Supplier', path: '/supplier', party: 'Company Name', table: 'suppliers', primary: 'Purchases', secondary: 'Payments', primaryType: 'purchase' },
+  credit: { title: 'Due Amount / Due Recovery', path: '/credit-recovery', party: 'Person Name', table: 'customers', primary: 'Due Amount', secondary: 'Due Recovery', balance: 'Remaining Due Amount', primaryType: 'credit_sale', add: { label: 'Add Person', name: 'Name', types: [['credit_sale', 'Due'], ['credit_recovery', 'Recovery']] } },
+  supplier: { title: 'Supplier', path: '/supplier', party: 'Company Name', table: 'suppliers', primary: 'Purchases', secondary: 'Payments', primaryType: 'purchase', add: { label: 'Add Supplier Name', name: 'Company Name', types: [['purchase', 'Purchase'], ['payment', 'Payment']] } },
   cash_purchase: { title: 'Local Supplier', path: '/local-supplier', amount: 'Amount' },
-  overhead: { title: 'Overhead Cost', path: '/overhead-cost', name: 'Overhead Name', amount: 'Cost Amount' },
+  overhead: { title: 'Overhead Cost', path: '/overhead-cost', name: 'Overhead Name', amount: 'Cost Amount', add: { label: 'Add Overhead', name: 'Overhead Name' } },
   conveyance: { title: 'Conveyance', path: '/conveyance', amount: 'Conveyance' },
 }
 

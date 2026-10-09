@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { businessDate } from '@/lib/format'
 import { requireRole } from '@/lib/auth'
+import { historyCategories, validHistoryDate } from '@/lib/history'
 
 const categories = new Set(['credit', 'supplier_payment', 'cash_purchase', 'overhead', 'conveyance'])
 const subtypes = new Set(['credit_sale', 'credit_recovery'])
@@ -110,6 +111,40 @@ export async function addCustomerAction(_previous, formData) {
   } catch (error) {
     console.error('addCustomerAction', error)
     return bad('Unable to add the customer. Please try again.')
+  }
+}
+
+export async function adminAddHistoryRecordAction(_previous, formData) {
+  await requireRole('superadmin')
+  const category = String(formData.get('category') || '')
+  const config = historyCategories[category]?.add
+  if (!config) return bad('This section does not support adding names.')
+  const name = clean(formData.get('name'), 150)
+  if (!name) return bad(`Enter the ${config.name.toLowerCase()}.`)
+  const phoneNumber = config.types ? clean(formData.get('phone_number'), 30) : null
+  const entryType = config.types ? clean(formData.get('entry_type'), 30) : null
+  const rawAmount = config.types ? String(formData.get('amount') || '').trim() : ''
+  const value = rawAmount ? amount(rawAmount) : null
+  if (rawAmount && (value === null || value <= 0)) return bad('Enter an amount greater than zero or leave it blank.')
+  if (entryType && !config.types.some(([type]) => type === entryType)) return bad('Select a valid entry type.')
+  if (value !== null && !entryType) return bad('Select an entry type for the amount.')
+  const reportDate = validHistoryDate(formData.get('business_date')) || businessDate()
+  if (value !== null && reportDate > businessDate()) return bad('Select today or an earlier report date.')
+  try {
+    const supabase = await createClient()
+    const { error } = await supabase.rpc('admin_add_history_record', {
+      p_category: category, p_name: name, p_phone_number: phoneNumber,
+      p_entry_type: entryType, p_amount: value,
+      p_business_date: reportDate,
+    })
+    if (error?.code === '23505') return bad('That name already exists. Use the existing record.')
+    if (error) throw error
+    refreshUserPages()
+    refreshAdminPages()
+    return { ...ok(`${name} added.`), entryRecorded: value !== null, businessDate: reportDate }
+  } catch (error) {
+    console.error('adminAddHistoryRecordAction', error)
+    return bad('Unable to add this record. Please try again.')
   }
 }
 

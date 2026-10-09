@@ -53,7 +53,7 @@ export function SubmitReport({ status, entries = [], onSubmitted }) {
       onSubmitted?.()
     }
   }, [state, onSubmitted])
-  if (status !== 'draft') return <p className="notice success">This report is {status} and locked for storekeepers.</p>
+  if (status !== 'draft') return <p className="notice success">This report is {status} and locked for users.</p>
   return <><ActionMessage state={state} /><button type="button" className="button primary full" onClick={() => setOpen(true)}>Submit Today's Report</button>{open && <div className="modal-backdrop"><div className="modal confirm-modal"><h2>Submit today's report?</h2><p>{entries.length} temporary {entries.length === 1 ? 'entry' : 'entries'} will be saved. Submitting then locks the report.</p><form action={action}><input type="hidden" name="confirm" value="yes" /><input type="hidden" name="staged_entries" value={JSON.stringify(entries)} /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setOpen(false)}>Cancel</button><SubmitButton pendingText="Submitting…">Yes, Submit</SubmitButton></div></form></div></div>}</>
 }
 

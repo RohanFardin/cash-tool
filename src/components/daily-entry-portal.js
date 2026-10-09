@@ -7,6 +7,7 @@ import { addCustomerAction, addSupplierAction } from '@/app/actions'
 import { SubmitReport } from '@/components/forms'
 import { ActionMessage, SubmitButton } from '@/components/action-ui'
 import { dateTime, taka } from '@/lib/format'
+import { calculateCashInHand } from '@/lib/cash'
 
 function Section({ id, icon: Icon, title, description, total, history, children }) {
   return <section id={id} className="entry-section card">
@@ -135,8 +136,8 @@ function OverheadPanel({ categories, entries, locked, total, onAdd, onDelete }) 
   </Section>
 }
 
-function CashInHandCalculator({ totals, storedAmount, locked }) {
-  const calculated = Math.round((Number(totals.cash_sales || 0) + Number(totals.credit_recovery || 0) - Number(totals.supplier_payments || 0) - Number(totals.cash_purchases || 0) - Number(totals.overhead_cost || 0) - Number(totals.conveyance || 0)) * 100) / 100
+function CashInHandCalculator({ totals, openingAmount, storedAmount, locked }) {
+  const calculated = calculateCashInHand(totals, openingAmount)
   const [preview, setPreview] = useState(null)
   useEffect(() => { setPreview(null) }, [calculated])
   const displayed = locked ? Number(storedAmount ?? calculated) : preview
@@ -184,6 +185,6 @@ export function DailyEntryPortal({ data }) {
     <AmountPanel id="local-supplier" icon={ShoppingBasket} title="Local Supplier" description="Cash purchases made locally today." category="cash_purchase" entries={cashPurchases} total={totals.cash_purchases} locked={locked} history="/local-supplier" onAdd={onAdd} onDelete={onDelete} />
     <OverheadPanel categories={data.overheadCategories} entries={overhead} locked={locked} total={totals.overhead_cost} onAdd={onAdd} onDelete={onDelete} />
     <AmountPanel id="conveyance" icon={Bike} title="Conveyance" description="Extra delivery and transport spending." category="conveyance" entries={conveyance} total={totals.conveyance} locked={locked} history="/conveyance" onAdd={onAdd} onDelete={onDelete} />
-    <section className="submit-section card"><div><h2>Finish Today's Entry</h2><p>Review or delete temporary entries, calculate cash in hand, then submit once to save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} storedAmount={data.report?.cash_in_hand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} /></div></section>
+    <section className="submit-section card"><div><h2>Finish Today's Entry</h2><p>Review or delete temporary entries, calculate cash in hand, then submit once to save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} openingAmount={data.openingCashInHand} storedAmount={data.cashInHand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} /></div></section>
   </div>
 }

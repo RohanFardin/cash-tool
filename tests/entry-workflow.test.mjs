@@ -57,6 +57,10 @@ before(async () => {
   `)
   const directory = new URL('../supabase/migrations/', import.meta.url)
   for (const file of (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort()) {
+    if (file.startsWith('009')) {
+      await db.query("update public.profiles set full_name = 'Storekeeper' where id = $1", [operator])
+      await db.query("update public.profiles set full_name = 'Second Storekeeper' where id = $1", [secondOperator])
+    }
     if (file.startsWith('003')) {
       await db.query('insert into auth.users (id,email) values ($1,$2),($3,$4)', [operator, 'user@pharmacy.local', admin, 'admin@pharmacy.local'])
       await db.query('insert into auth.users (id,email) values ($1,$2)', [secondOperator, 'user2@pharmacy.local'])
@@ -199,6 +203,88 @@ test('contact numbers and notes remain visible in customer and supplier history'
   assert.equal(company.description, 'Invoice 42')
 })
 
+test('cumulative cash excludes drafts and includes receipts less paid expenses on submission', async () => {
+  await cash(1000)
+  await credit('credit_recovery', 200)
+  await supplier('payment', 100)
+  await expense('cash_purchase', 80)
+  await expense('overhead', 50)
+  await expense('conveyance', 30)
+  let balances = (await db.query('select * from public.daily_cash_balances order by business_date')).rows
+  assert.equal(balances.length, 1)
+  assert.equal(Number(balances[0].cash_in_hand), 400)
+  await submit()
+  balances = (await db.query('select * from public.daily_cash_balances order by business_date')).rows
+  assert.equal(balances.length, 2)
+  assert.equal(Number(balances[1].total_sales), 1000)
+  assert.equal(Number(balances[1].daily_cash_change), 940)
+  assert.equal(Number(balances[1].cash_in_hand), 1340)
+  const filtered = (await db.query('select * from public.daily_cash_balances where id = $1', [todayId])).rows[0]
+  assert.equal(Number(filtered.cash_in_hand), 1340, 'filtering keeps contributions from earlier days')
+  const totals = (await db.query('select * from public.cash_sales_history_totals(public.current_business_date())')).rows[0]
+  assert.equal(Number(totals.report_count), 1)
+  assert.equal(Number(totals.total_sales), 1000)
+  assert.equal(Number(totals.cash_in_hand), 1340)
+})
+
+test('older report corrections update every later cumulative cash balance', async () => {
+  await cash(100)
+  await submit()
+  await actor(admin)
+  const previousEntry = (await db.query('select id from public.cash_sales_entries where daily_report_id = $1', [yesterdayId])).rows[0]
+  await db.query("select public.admin_edit_entry('cash', $1, 250)", [previousEntry.id])
+  const balances = (await db.query('select * from public.daily_cash_balances order by business_date')).rows
+  assert.equal(Number(balances[0].cash_in_hand), 250)
+  assert.equal(Number(balances[1].cash_in_hand), 350)
+  const totals = (await db.query('select * from public.cash_sales_history_totals()')).rows[0]
+  assert.equal(Number(totals.total_sales), 350)
+  assert.equal(Number(totals.cash_in_hand), 350)
+})
+
+test('cumulative cash supports deficits, zero and expense-only reports', async () => {
+  const payment = (await expense('overhead', 500)).rows[0]
+  await submit()
+  let balance = (await db.query('select * from public.daily_cash_balances where id = $1', [todayId])).rows[0]
+  assert.equal(Number(balance.total_sales), 0)
+  assert.equal(Number(balance.cash_in_hand), -100)
+  await actor(admin)
+  await db.query('select public.admin_edit_entry($1, $2, 400, null, null, $3)', ['transaction', payment.id, overheadId])
+  balance = (await db.query('select * from public.daily_cash_balances where id = $1', [todayId])).rows[0]
+  assert.equal(Number(balance.cash_in_hand), 0)
+})
+
+test('running cash totals and paginated balances include all earlier approved days across gaps', async () => {
+  await actor(admin)
+  const reports = (await db.query(`
+    insert into public.daily_reports (business_date, submitted_by)
+    select public.current_business_date() - (n * 2 + 2), $1
+    from generate_series(1, 60) n returning id
+  `, [admin])).rows
+  for (const report of reports) await cash(0.25, report.id)
+  await db.query("update public.daily_reports set status = 'approved' where id = any($1::bigint[])", [reports.map((report) => report.id)])
+  const totals = (await db.query('select * from public.cash_sales_history_totals()')).rows[0]
+  assert.equal(Number(totals.report_count), 61)
+  assert.equal(Number(totals.total_sales), 415)
+  assert.equal(Number(totals.cash_in_hand), 415)
+  const page = (await db.query('select * from public.daily_cash_balances order by business_date desc limit 50 offset 50')).rows
+  assert.equal(page.length, 11)
+  assert.equal(Number(page[0].cash_in_hand), 2.75)
+  assert.equal(Number(page.at(-1).cash_in_hand), 0.25)
+  const gap = (await db.query('select cash_in_hand from public.daily_cash_balances where business_date < public.current_business_date() - 2 order by business_date desc limit 1')).rows[0]
+  assert.equal(Number(gap.cash_in_hand), 15)
+  const empty = (await db.query("select * from public.cash_sales_history_totals('1900-01-01')")).rows[0]
+  assert.equal(Number(empty.report_count), 0)
+  assert.equal(Number(empty.cash_in_hand), 0)
+})
+
+test('legacy account labels become User and preserve usernames and roles', async () => {
+  const users = (await db.query('select full_name, username, role from public.profiles where id in ($1, $2) order by username', [operator, secondOperator])).rows
+  assert.deepEqual(users, [
+    { full_name: 'User', username: 'user', role: 'user' },
+    { full_name: 'Second User', username: 'user2', role: 'user' },
+  ])
+})
+
 test('cash in hand is null in draft and stored from the requested formula on submission', async () => {
   await cash(1000)
   await credit('credit_sale', 200)
@@ -247,7 +333,7 @@ test('an invalid staged batch rolls back every entry and leaves the report open'
   assert.equal((await db.query('select status from public.daily_reports where id=$1', [todayId])).rows[0].status, 'draft')
 })
 
-test('storekeepers can add supplier companies with a phone number and notes', async () => {
+test('users can add supplier companies with a phone number and notes', async () => {
   const company = (await db.query("insert into public.suppliers (name,phone_number,notes,opening_due,created_by) values ('New Company','01910000000','New supplier',0,$1) returning name,phone_number,notes", [operator])).rows[0]
   assert.deepEqual(company, { name: 'New Company', phone_number: '01910000000', notes: 'New supplier' })
 })
@@ -275,12 +361,81 @@ test('administrator cash corrections preserve history and report totals', async 
   assert.equal(Number(summary.primary_total), 480) // previous day's 400 + corrected 80
 })
 
+test('admin name-only records reuse directories without creating financial entries or reports', async () => {
+  await actor(admin)
+  const reportCount = (await db.query('select count(*) from public.daily_reports')).rows[0].count
+  const person = (await db.query("select public.admin_add_history_record('credit','New Person','01700000000') as id")).rows[0].id
+  const company = (await db.query("select public.admin_add_history_record('supplier','New Company') as id")).rows[0].id
+  const overhead = (await db.query("select public.admin_add_history_record('overhead','Cash Drawn') as id")).rows[0].id
+  const customer = (await db.query('select name, phone_number, opening_due from public.customers where id=$1', [person])).rows[0]
+  assert.equal(customer.name, 'New Person')
+  assert.equal(customer.phone_number, '01700000000')
+  assert.equal(Number(customer.opening_due), 0)
+  assert.equal((await db.query('select * from public.customer_ledger_entries where customer_id=$1', [person])).rows.length, 0)
+  assert.equal((await db.query('select * from public.supplier_ledger_entries where supplier_id=$1', [company])).rows.length, 0)
+  assert.equal((await db.query('select * from public.transactions where overhead_category_id=$1', [overhead])).rows.length, 0)
+  assert.equal((await db.query('select count(*) from public.daily_reports')).rows[0].count, reportCount)
+})
+
+test('admin optional amounts use the selected submitted report and preserve contact snapshots', async () => {
+  await actor(admin)
+  const date = (await db.query('select business_date from public.daily_reports where id=$1', [yesterdayId])).rows[0].business_date
+  for (const [category, name, type, value] of [
+    ['credit', 'New Due', 'credit_sale', 100], ['credit', 'New Recovery', 'credit_recovery', 120],
+    ['supplier', 'New Purchase', 'purchase', 200], ['supplier', 'New Payment', 'payment', 50],
+  ]) {
+    const id = (await db.query('select public.admin_add_history_record($1,$2,$3,$4,$5,$6) as id', [category, name, '01800000000', type, value, date])).rows[0].id
+    const history = (await db.query('select * from public.entry_history where party_id=$1 and category=$2', [id, category])).rows[0]
+    assert.equal(Number(history.daily_report_id), Number(yesterdayId))
+    assert.equal(history.entry_type, type)
+    assert.equal(Number(history.amount), value)
+    assert.equal(history.phone_number, '01800000000')
+    assert.equal(history.created_by, admin)
+  }
+  const report = (await db.query('select status, cash_in_hand from public.daily_reports where id=$1', [yesterdayId])).rows[0]
+  assert.equal(report.status, 'submitted')
+  assert.equal(Number(report.cash_in_hand), 470)
+  assert.equal((await db.query('select status from public.daily_reports where id=$1', [todayId])).rows[0].status, 'draft')
+})
+
+test('admin additions create a missing selected-date draft and roll back the name if its entry fails', async () => {
+  await actor(admin)
+  const company = (await db.query("select public.admin_add_history_record('supplier','Earlier Company',null,'purchase',25,public.current_business_date()-2) as id")).rows[0].id
+  const entry = (await db.query('select e.amount,r.business_date,r.status from public.supplier_ledger_entries e join public.daily_reports r on r.id=e.daily_report_id where e.supplier_id=$1', [company])).rows[0]
+  assert.equal(entry.status, 'draft')
+  assert.equal(Number(entry.amount), 25)
+  await db.exec('savepoint invalid_addition')
+  await assert.rejects(db.query("select public.admin_add_history_record('credit','Failed Amount',null,'credit_sale',1000000000000000)"), /numeric field overflow/)
+  await db.exec('rollback to invalid_addition')
+  assert.equal((await db.query("select * from public.customers where name='Failed Amount'")).rows.length, 0)
+})
+
+test('admin additions reject duplicates, invalid amounts, mismatched types and future financial entries', async () => {
+  await actor(admin)
+  for (const query of [
+    "select public.admin_add_history_record('credit','Alice')",
+    "select public.admin_add_history_record('credit','Invalid Zero',null,'credit_sale',0)",
+    "select public.admin_add_history_record('supplier','Invalid Type',null,'credit_sale',10)",
+    "select public.admin_add_history_record('credit','Missing Type',null,null,10)",
+    "select public.admin_add_history_record('overhead','Invalid Overhead',null,null,10)",
+    "select public.admin_add_history_record('credit','Future Amount',null,'credit_sale',10,public.current_business_date()+1)",
+  ]) {
+    await db.exec('savepoint invalid_record')
+    await assert.rejects(db.query(query))
+    await db.exec('rollback to invalid_record')
+  }
+})
+
+test('users cannot invoke admin additions', async () => {
+  await assert.rejects(db.query("select public.admin_add_history_record('overhead','Forbidden Name')"), /Administrator access required/)
+})
+
 test('anonymous users cannot read history', async () => {
   await db.exec('set local role anon')
   await assert.rejects(db.query('select * from public.entry_history'), /permission denied/)
 })
 
-test('both storekeepers share one daily report, history, totals and submission', async () => {
+test('both users share one daily report, history, totals and submission', async () => {
   await cash(100)
   await actor(secondOperator)
   await db.query('insert into public.cash_sales_entries (daily_report_id,amount,created_by) values ($1,200,$2)', [todayId, secondOperator])

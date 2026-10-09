@@ -39,7 +39,7 @@ const accounts = [
   {
     username: 'user',
     email: 'user@pharmacy.local',
-    fullName: 'Storekeeper',
+    fullName: 'User',
     role: 'user',
     suppliedPassword: process.env.INITIAL_USER_PASSWORD,
   },

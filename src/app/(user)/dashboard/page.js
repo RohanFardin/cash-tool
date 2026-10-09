@@ -20,7 +20,7 @@ export default async function DashboardPage() {
   const count = data.cashEntries.length + data.transactions.length + data.customerEntries.length + data.supplierEntries.length
   return <div className="page-stack daily-page">
     <header className="hero-heading"><div><p className="eyebrow">Daily Entry Portal</p><h1>{formatDate(data.date, true)}</h1><p>Enter all of today’s pharmacy accounts in one place.</p></div><span className={`status ${data.report?.status || 'draft'}`}>{data.report?.status || 'draft'}</span></header>
-    <section className={`previous-cash-card card ${data.previousCashInHand > 0 ? 'positive' : data.previousCashInHand < 0 ? 'negative' : 'neutral'}`}><div><span>Cash in Hand</span><small>{formatDate(data.previousDate, true)}</small></div>{data.previousCashInHand === null ? <strong className="muted">No submitted report</strong> : <strong>{taka(data.previousCashInHand)}</strong>}</section>
+    <section className={`previous-cash-card card ${data.cashInHand > 0 ? 'positive' : data.cashInHand < 0 ? 'negative' : 'neutral'}`}><div><span>Cash in Hand</span><small>{data.cashBalanceDate ? `Running balance through ${formatDate(data.cashBalanceDate, true)}` : 'Starting balance · No submitted reports yet'}</small></div><strong>{taka(data.cashInHand)}</strong></section>
     <nav className="entry-shortcuts" aria-label="Daily entry sections">{shortcuts.map(([id, label, Icon]) => <a key={id} href={`#${id}`}><Icon size={19} /><span>{label}</span></a>)}</nav>
     <div className="daily-progress"><span><strong>{count}</strong> entries today</span>{data.report?.updated_at && <span><Clock3 size={15} />Updated {dateTime(data.report.updated_at)}</span>}</div>
     <DailyEntryPortal data={data} />

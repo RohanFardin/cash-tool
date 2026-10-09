@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
-import { businessDate } from '@/lib/format'
+import { businessDate, displayUserName } from '@/lib/format'
+import { getCashBalance } from '@/lib/cash-data'
 
 export function totals(report, transactions = [], customerEntries = [], supplierEntries = []) {
   const result = {
@@ -68,25 +69,21 @@ export async function getTodayReport() {
 export async function getDailyEntryPortal() {
   const supabase = await createClient()
   const today = await getTodayReport()
-  const currentDate = new Date(`${today.date}T00:00:00Z`)
-  currentDate.setUTCDate(currentDate.getUTCDate() - 1)
-  const previousDate = currentDate.toISOString().slice(0, 10)
-  const [customersResult, suppliersResult, overheadResult, profilesResult, previousReportResult] = await Promise.all([
+  const [customersResult, suppliersResult, overheadResult, profilesResult, openingBalance] = await Promise.all([
     supabase.from('customer_balances').select('*').eq('active', true).order('name'),
     supabase.from('supplier_balances').select('*').eq('active', true).order('name'),
     supabase.from('overhead_categories').select('id, name').eq('active', true).order('name'),
     supabase.from('profiles').select('id, full_name, username'),
-    supabase.from('daily_reports').select('business_date, cash_in_hand, status')
-      .eq('business_date', previousDate).in('status', ['submitted', 'approved']).maybeSingle(),
+    getCashBalance(today.date, { before: true }),
   ])
-  if (customersResult.error || suppliersResult.error || overheadResult.error || profilesResult.error || previousReportResult.error) {
+  if (customersResult.error || suppliersResult.error || overheadResult.error || profilesResult.error) {
     throw new Error('Unable to load daily entry options. Make sure all migrations are applied.')
   }
-  const names = new Map((profilesResult.data || []).map((profile) => [profile.id, profile.full_name || profile.username]))
+  const names = new Map((profilesResult.data || []).map((profile) => [profile.id, displayUserName(profile.full_name || profile.username)]))
   const addCreator = (rows) => rows.map((row) => ({
     ...row,
     party_name: row.customers?.name || row.suppliers?.name,
-    creator_name: names.get(row.created_by) || 'Storekeeper',
+    creator_name: names.get(row.created_by) || 'User',
   }))
   return {
     ...today,
@@ -97,8 +94,9 @@ export async function getDailyEntryPortal() {
     supplierEntries: addCreator(today.supplierEntries),
     transactions: addCreator(today.transactions),
     cashEntries: addCreator(today.cashEntries),
-    previousDate,
-    previousCashInHand: previousReportResult.data?.cash_in_hand ?? null,
+    openingCashInHand: openingBalance.cashInHand,
+    cashInHand: Math.round((openingBalance.cashInHand + Number(today.report?.cash_in_hand || 0)) * 100) / 100,
+    cashBalanceDate: today.report && today.report.status !== 'draft' ? today.date : openingBalance.asOfDate,
   }
 }
 
