@@ -19,15 +19,24 @@ export function historyFilters(params = {}) {
 }
 
 export function validHistoryDate(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000')) return null
   const date = new Date(`${value}T00:00:00Z`)
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null
 }
 
-export function historyUrl(path, page, partyId, date = null) {
+export function historyDateRange(params = {}) {
+  const date = validHistoryDate(params.date)
+  const from = validHistoryDate(params.from) || date
+  const to = validHistoryDate(params.to) || date
+  return { from, to, rangeError: from && to && from > to ? 'Date From must be on or before Date To.' : null }
+}
+
+export function historyUrl(path, page, partyId, date = null, range = {}) {
   const params = new URLSearchParams()
   if (partyId) params.set('party', String(partyId))
   if (date) params.set('date', date)
+  if (range.from) params.set('from', range.from)
+  if (range.to) params.set('to', range.to)
   if (page > 1) params.set('page', String(page))
   return params.size ? `${path}?${params}` : path
 }

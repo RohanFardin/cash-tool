@@ -24,7 +24,7 @@ function AddRecordForm({ category, date, onClose, onAdded }) {
       <div className="modal-head"><h2 id={heading}>{config.label}</h2><button type="button" className="icon-button" aria-label="Close form" disabled={pending} onClick={onClose}><X /></button></div>
       <form action={action} className="entry-form">
         <input type="hidden" name="category" value={category} />
-        <input type="hidden" name="business_date" value={date} />
+        {config.types && <label><span>Report Date</span><input type="date" name="business_date" defaultValue={date} required /></label>}
         <label><span>{config.name}</span><input name="name" maxLength="150" required autoFocus /></label>
         {config.types && <>
           <p className="helper-text">Entry date: {formatDate(date, true)}</p>

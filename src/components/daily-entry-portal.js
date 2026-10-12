@@ -1,24 +1,27 @@
 'use client'
 
 import Link from 'next/link'
-import { useActionState, useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useActionState, useCallback, useEffect, useMemo, useState } from 'react'
 import { Banknote, Bike, Building2, Calculator, Plus, ReceiptText, Search, ShoppingBasket, Trash2, UserRoundPlus, UsersRound } from 'lucide-react'
 import { addCustomerAction, addSupplierAction } from '@/app/actions'
-import { SubmitReport } from '@/components/forms'
+import { SubmitReport } from '@/components/submit-report'
 import { ActionMessage, SubmitButton } from '@/components/action-ui'
 import { dateTime, taka } from '@/lib/format'
 import { calculateCashInHand } from '@/lib/cash'
 
+const AdminDashboardContext = createContext(false)
+
 function Section({ id, icon: Icon, title, description, total, history, children }) {
+  const admin = useContext(AdminDashboardContext)
   return <section id={id} className="entry-section card">
     <header className="entry-section-head"><span className="section-icon"><Icon size={22} /></span><div><h2>{title}</h2><p>{description}</p></div>{total !== undefined && <strong>{taka(total)}</strong>}</header>
     {children}
-    <Link className="history-link" href={history}>View history →</Link>
+    <Link className="history-link" href={admin ? `/admin${history}` : history}>View history →</Link>
   </section>
 }
 
 function EntryList({ entries, empty, name, type, onDelete, locked }) {
-  return <div className="portal-entry-list compact">
+  return <div className="portal-entry-list">
     {entries.map((entry) => <article key={entry.local_id || entry.id}><div><strong>{name(entry)}</strong>{type && <span>{type(entry)}</span>}<small>{entry.staged ? 'Temporary · Not submitted yet' : `${dateTime(entry.created_at)} · Entered by ${entry.creator_name}`}</small>{entry.phone_number && <small>Phone: {entry.phone_number}</small>}{entry.description && <small>Note: {entry.description}</small>}</div><b>{taka(entry.amount)}</b>{entry.staged && !locked && <button type="button" className="icon-button danger staged-delete" aria-label={`Delete temporary ${name(entry)} entry`} onClick={() => onDelete(entry.local_id)}><Trash2 size={18} /></button>}</article>)}
     {entries.length === 0 && <p className="portal-empty">{empty}</p>}
   </div>
@@ -45,76 +48,58 @@ function CashSalesPanel({ entries, total, locked, onAdd, onDelete }) {
   </Section>
 }
 
-function CustomerPanel({ customers, entries, locked, onAdd, onDelete }) {
-  const [search, setSearch] = useState('')
-  const [selectedId, setSelectedId] = useState('')
-  const [entryType, setEntryType] = useState('credit_sale')
-  const [showAdd, setShowAdd] = useState(false)
-  const [addState, addAction] = useActionState(addCustomerAction, null)
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    return customers.filter((customer) => !term || customer.name.toLowerCase().includes(term)).slice(0, 8)
-  }, [customers, search])
-  const selected = customers.find((customer) => String(customer.id) === selectedId)
-    || (addState?.customer && String(addState.customer.id) === selectedId ? { ...addState.customer, current_due: 0 } : null)
-  useEffect(() => {
-    if (addState?.customer) {
-      setSelectedId(String(addState.customer.id))
-      setSearch(addState.customer.name)
-      setShowAdd(false)
-    }
-  }, [addState])
-  return <Section id="credit" icon={UsersRound} title="Due Amount" description="Select or add a person, then stage a due amount or recovery." history="/credit-recovery">
-    {!locked && <>
-      <div className="customer-search-row"><label className="search-field"><Search size={18} /><input aria-label="Search customer name" value={search} onChange={(event) => { setSearch(event.target.value); setSelectedId('') }} placeholder="Search customer name" /></label><button type="button" className="button secondary square" onClick={() => setShowAdd((value) => !value)} aria-label="Add customer"><UserRoundPlus size={20} /></button></div>
-      {!selected && search && <div className="search-results">{filtered.map((customer) => <button type="button" key={customer.id} onClick={() => { setSelectedId(String(customer.id)); setSearch(customer.name) }}><span>{customer.name}</span><small>Due {taka(customer.current_due)}</small></button>)}{filtered.length === 0 && <p>No customer found. Use the + button to add one.</p>}</div>}
-      {showAdd && <form action={addAction} className="inline-add-form"><label><span>Person Name</span><input name="name" defaultValue={search} maxLength="150" required autoFocus /></label><label><span>Phone Number</span><input name="phone_number" type="tel" inputMode="tel" maxLength="30" /></label><label><span>Notes</span><textarea name="notes" maxLength="500" rows="2" /></label><ActionMessage state={addState} /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setShowAdd(false)}>Cancel</button><SubmitButton>Add Person</SubmitButton></div></form>}
-      {selected && <form key={'customer-' + selected.id} onSubmit={(event) => addAmount(event, (input) => ({
-        kind: 'customer', party_id: selected.id, party_name: selected.name, entry_type: entryType,
-        phone_number: String(input.get('phone_number') || '').trim() || null,
-        description: String(input.get('description') || '').trim() || null,
-      }), onAdd)} className="portal-entry-form">
-        <div className="selected-party"><span><strong>{selected.name}</strong><small>Current due: {taka(selected.current_due)}</small>{selected.phone_number && <small>{selected.phone_number}</small>}</span><button type="button" onClick={() => { setSelectedId(''); setSearch('') }}>Change</button></div>
-        <div className="type-toggle"><label className="sale"><input type="radio" name="entry_type" value="credit_sale" checked={entryType === 'credit_sale'} onChange={() => setEntryType('credit_sale')} /><span>Due Amount</span></label><label className="recovery"><input type="radio" name="entry_type" value="credit_recovery" checked={entryType === 'credit_recovery'} onChange={() => setEntryType('credit_recovery')} /><span>Due Recovery</span></label></div>
-        <AmountInput /><label><span>Phone Number</span><input name="phone_number" type="tel" inputMode="tel" maxLength="30" defaultValue={selected.phone_number || ''} placeholder="Optional contact number" /></label><label><span>Optional Note</span><input name="description" maxLength="500" defaultValue={selected.notes || ''} /></label><button type="submit" className="button primary">Add Temporary Entry</button>
-      </form>}
-    </>}
-    <EntryList entries={entries} empty="No due entries today." name={(entry) => entry.party_name || 'Customer'} type={(entry) => entry.entry_type === 'credit_sale' ? 'Due Amount' : 'Due Recovery'} onDelete={onDelete} locked={locked} />
-  </Section>
+const partySections = {
+  customer: {
+    id: 'credit', icon: UsersRound, title: 'Due Amount', history: '/credit-recovery',
+    description: 'Select or add a person, then stage a due amount or recovery.',
+    action: addCustomerAction, label: 'customer', nameLabel: 'Person Name', addLabel: 'Add Person', addIcon: UserRoundPlus,
+    types: [['credit_sale', 'Due Amount'], ['credit_recovery', 'Due Recovery']],
+    empty: 'No due entries today.', fallbackName: 'Customer',
+  },
+  supplier: {
+    id: 'supplier', icon: Building2, title: 'Supplier', history: '/supplier',
+    description: 'Select or add a company, then stage a purchase or payment.',
+    action: addSupplierAction, label: 'company', nameLabel: 'Company Name', addLabel: 'Add Company', addIcon: Plus,
+    types: [['purchase', 'Purchase'], ['payment', 'Payment']],
+    empty: 'No supplier entries today.', fallbackName: 'Supplier',
+  },
 }
 
-function SupplierPanel({ suppliers, entries, locked, onAdd, onDelete }) {
+function PartyPanel({ kind, parties, entries, locked, onAdd, onDelete }) {
+  const config = partySections[kind]
+  const AddIcon = config.addIcon
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
-  const [entryType, setEntryType] = useState('purchase')
+  const [entryType, setEntryType] = useState(config.types[0][0])
   const [showAdd, setShowAdd] = useState(false)
-  const [addState, addAction] = useActionState(addSupplierAction, null)
-  const selected = suppliers.find((supplier) => String(supplier.id) === selectedId)
-    || (addState?.supplier && String(addState.supplier.id) === selectedId ? { ...addState.supplier, current_due: 0 } : null)
-  const filtered = suppliers.filter((supplier) => supplier.name.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8)
+  const [addState, addAction] = useActionState(config.action, null)
+  const added = addState?.[kind]
+  const selected = parties.find((party) => String(party.id) === selectedId)
+    || (added && String(added.id) === selectedId ? { ...added, current_due: 0 } : null)
+  const filtered = useMemo(() => parties.filter((party) => party.name.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8), [parties, search])
   useEffect(() => {
-    if (addState?.supplier) {
-      setSelectedId(String(addState.supplier.id))
-      setSearch(addState.supplier.name)
+    if (added) {
+      setSelectedId(String(added.id))
+      setSearch(added.name)
       setShowAdd(false)
     }
-  }, [addState])
-  return <Section id="supplier" icon={Building2} title="Supplier" description="Select or add a company, then stage a purchase or payment." history="/supplier">
+  }, [added])
+  return <Section id={config.id} icon={config.icon} title={config.title} description={config.description} history={config.history}>
     {!locked && <>
-      <div className="customer-search-row"><label className="search-field"><Search size={18} /><input aria-label="Search company name" value={search} onChange={(event) => { setSearch(event.target.value); setSelectedId('') }} placeholder="Search company name" /></label><button type="button" className="button secondary square" onClick={() => setShowAdd((value) => !value)} aria-label="Add company"><Plus size={20} /></button></div>
-      {!selected && search && <div className="search-results">{filtered.map((supplier) => <button type="button" key={supplier.id} onClick={() => { setSelectedId(String(supplier.id)); setSearch(supplier.name) }}><span>{supplier.name}</span><small>Due {taka(supplier.current_due)}</small></button>)}{!filtered.length && <p>No company found. Use the + button to add one.</p>}</div>}
-      {showAdd && <form action={addAction} className="inline-add-form"><label><span>Company Name</span><input name="name" defaultValue={search} maxLength="150" required autoFocus /></label><label><span>Phone Number</span><input name="phone_number" type="tel" inputMode="tel" maxLength="30" /></label><label><span>Notes</span><textarea name="notes" maxLength="500" rows="2" /></label><ActionMessage state={addState} /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setShowAdd(false)}>Cancel</button><SubmitButton>Add Company</SubmitButton></div></form>}
-      {selected && <form key={'supplier-' + selected.id} onSubmit={(event) => addAmount(event, (input) => ({
-        kind: 'supplier', party_id: selected.id, party_name: selected.name, entry_type: entryType,
+      <div className="customer-search-row"><label className="search-field"><Search size={18} /><input aria-label={'Search ' + config.label + ' name'} value={search} onChange={(event) => { setSearch(event.target.value); setSelectedId('') }} placeholder={'Search ' + config.label + ' name'} /></label><button type="button" className="button secondary square" onClick={() => setShowAdd((value) => !value)} aria-label={'Add ' + config.label}><AddIcon size={20} /></button></div>
+      {!selected && search && <div className="search-results">{filtered.map((party) => <button type="button" key={party.id} onClick={() => { setSelectedId(String(party.id)); setSearch(party.name) }}><span>{party.name}</span><small>Due {taka(party.current_due)}</small></button>)}{!filtered.length && <p>No {config.label} found. Use the + button to add one.</p>}</div>}
+      {showAdd && <form action={addAction} className="inline-add-form"><label><span>{config.nameLabel}</span><input name="name" defaultValue={search} maxLength="150" required autoFocus /></label><label><span>Phone Number</span><input name="phone_number" type="tel" inputMode="tel" maxLength="30" /></label><label><span>Notes</span><textarea name="notes" maxLength="500" rows="2" /></label><ActionMessage state={addState} /><div className="form-actions"><button type="button" className="button ghost" onClick={() => setShowAdd(false)}>Cancel</button><SubmitButton>{config.addLabel}</SubmitButton></div></form>}
+      {selected && <form key={kind + '-' + selected.id} onSubmit={(event) => addAmount(event, (input) => ({
+        kind, party_id: selected.id, party_name: selected.name, entry_type: entryType,
         phone_number: String(input.get('phone_number') || '').trim() || null,
         description: String(input.get('description') || '').trim() || null,
       }), onAdd)} className="portal-entry-form">
         <div className="selected-party"><span><strong>{selected.name}</strong><small>Current due: {taka(selected.current_due)}</small>{selected.phone_number && <small>{selected.phone_number}</small>}</span><button type="button" onClick={() => { setSelectedId(''); setSearch('') }}>Change</button></div>
-        <div className="type-toggle"><label className="sale"><input type="radio" name="entry_type" value="purchase" checked={entryType === 'purchase'} onChange={() => setEntryType('purchase')} /><span>Purchase</span></label><label className="recovery"><input type="radio" name="entry_type" value="payment" checked={entryType === 'payment'} onChange={() => setEntryType('payment')} /><span>Payment</span></label></div>
+        <div className="type-toggle">{config.types.map(([value, label], index) => <label key={value} className={index ? 'recovery' : 'sale'}><input type="radio" name="entry_type" value={value} checked={entryType === value} onChange={() => setEntryType(value)} /><span>{label}</span></label>)}</div>
         <AmountInput /><label><span>Phone Number</span><input name="phone_number" type="tel" inputMode="tel" maxLength="30" defaultValue={selected.phone_number || ''} placeholder="Optional contact number" /></label><label><span>Optional Note</span><input name="description" maxLength="500" defaultValue={selected.notes || ''} /></label><button type="submit" className="button primary">Add Temporary Entry</button>
       </form>}
     </>}
-    <EntryList entries={entries} empty="No supplier entries today." name={(entry) => entry.party_name || 'Supplier'} type={(entry) => entry.entry_type === 'purchase' ? 'Purchase' : 'Payment'} onDelete={onDelete} locked={locked} />
+    <EntryList entries={entries} empty={config.empty} name={(entry) => entry.party_name || config.fallbackName} type={(entry) => config.types[entry.entry_type === config.types[0][0] ? 0 : 1][1]} onDelete={onDelete} locked={locked} />
   </Section>
 }
 
@@ -137,16 +122,17 @@ function OverheadPanel({ categories, entries, locked, total, onAdd, onDelete }) 
 }
 
 function CashInHandCalculator({ totals, openingAmount, storedAmount, locked }) {
+  const admin = useContext(AdminDashboardContext)
   const calculated = calculateCashInHand(totals, openingAmount)
   const [preview, setPreview] = useState(null)
   useEffect(() => { setPreview(null) }, [calculated])
   const displayed = locked ? Number(storedAmount ?? calculated) : preview
   const tone = displayed > 0 ? 'positive' : displayed < 0 ? 'negative' : 'neutral'
-  return <div className="cash-calculator">{displayed !== null && <div className={`cash-result ${tone}`}><span>{locked ? 'Submitted Cash in Hand' : "Today's Cash in Hand"}</span><strong>{taka(displayed)}</strong></div>}{!locked && <button type="button" className="button secondary full" onClick={() => setPreview(calculated)}><Calculator size={18} />Calculate Cash in Hand</button>}</div>
+  return <div className="cash-calculator">{displayed !== null && <div className={`cash-result ${tone}`}><span>{locked ? 'Submitted Cash in Hand' : admin ? 'Report Cash in Hand' : "Today's Cash in Hand"}</span><strong>{taka(displayed)}</strong></div>}{!locked && <button type="button" className="button secondary full" onClick={() => setPreview(calculated)}><Calculator size={18} />Calculate Cash in Hand</button>}</div>
 }
 
-export function DailyEntryPortal({ data }) {
-  const locked = Boolean(data.report && data.report.status !== 'draft')
+export function DailyEntryPortal({ data, admin = false }) {
+  const locked = !admin && Boolean(data.report && data.report.status !== 'draft')
   const [staged, setStaged] = useState([])
   useEffect(() => { if (locked) setStaged([]) }, [locked])
   const onAdd = useCallback((entry) => setStaged((current) => [...current, {
@@ -176,15 +162,16 @@ export function DailyEntryPortal({ data }) {
   const cashPurchases = [...data.transactions.filter((row) => row.category === 'cash_purchase'), ...rows('transaction', 'cash_purchase')]
   const overhead = [...data.transactions.filter((row) => row.category === 'overhead'), ...rows('transaction', 'overhead')]
   const conveyance = [...data.transactions.filter((row) => row.category === 'conveyance'), ...rows('transaction', 'conveyance')]
-  return <div className="daily-entry-portal">
+  return <AdminDashboardContext.Provider value={admin}><div className="daily-entry-portal">
+    {admin && data.report?.status !== 'draft' && data.report && <div className="staged-banner"><strong>Add missed entries</strong><span>This report is {data.report.status}. Saved entries will update its totals while user entry forms stay locked.</span></div>}
     {locked && <div className="locked-banner"><strong>Report submitted</strong><span>Today's entries are read-only and cannot be deleted.</span><Link href="/summary">View today's summary →</Link></div>}
     {!locked && staged.length > 0 && <div className="staged-banner"><strong>{staged.length} temporary {staged.length === 1 ? 'entry' : 'entries'}</strong><span>Nothing below is stored until you submit the report.</span></div>}
     <CashSalesPanel entries={cashEntries} total={totals.cash_sales} locked={locked} onAdd={onAdd} onDelete={onDelete} />
-    <CustomerPanel customers={data.customers} entries={customerEntries} locked={locked} onAdd={onAdd} onDelete={onDelete} />
-    <SupplierPanel suppliers={data.suppliers} entries={supplierEntries} locked={locked} onAdd={onAdd} onDelete={onDelete} />
+    <PartyPanel kind="customer" parties={data.customers} entries={customerEntries} locked={locked} onAdd={onAdd} onDelete={onDelete} />
+    <PartyPanel kind="supplier" parties={data.suppliers} entries={supplierEntries} locked={locked} onAdd={onAdd} onDelete={onDelete} />
     <AmountPanel id="local-supplier" icon={ShoppingBasket} title="Local Supplier" description="Cash purchases made locally today." category="cash_purchase" entries={cashPurchases} total={totals.cash_purchases} locked={locked} history="/local-supplier" onAdd={onAdd} onDelete={onDelete} />
     <OverheadPanel categories={data.overheadCategories} entries={overhead} locked={locked} total={totals.overhead_cost} onAdd={onAdd} onDelete={onDelete} />
     <AmountPanel id="conveyance" icon={Bike} title="Conveyance" description="Extra delivery and transport spending." category="conveyance" entries={conveyance} total={totals.conveyance} locked={locked} history="/conveyance" onAdd={onAdd} onDelete={onDelete} />
-    <section className="submit-section card"><div><h2>Finish Today's Entry</h2><p>Review or delete temporary entries, calculate cash in hand, then submit once to save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} openingAmount={data.openingCashInHand} storedAmount={data.cashInHand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} /></div></section>
-  </div>
+    <section className="submit-section card"><div><h2>{admin ? 'Save Report Entries' : "Finish Today's Entry"}</h2><p>Review or delete temporary entries, calculate cash in hand, then save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} openingAmount={data.openingCashInHand} storedAmount={data.cashInHand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} admin={admin} date={data.date} /></div></section>
+  </div></AdminDashboardContext.Provider>
 }

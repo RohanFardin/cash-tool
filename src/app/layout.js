@@ -1,8 +1,8 @@
 import './globals.css'
 
 export const metadata = {
-  title: { default: 'Pharmacy Accounts', template: '%s · Pharmacy Accounts' },
-  description: 'Daily pharmacy financial reporting and administration.',
+  title: { default: 'Ozi Pharma', template: '%s · Ozi Pharma' },
+  description: 'Daily financial reporting and administration for Ozi Pharma.',
 }
 
 export const viewport = { width: 'device-width', initialScale: 1, themeColor: '#0b6b57' }

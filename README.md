@@ -1,4 +1,4 @@
-# Pharmacy Accounts
+# Ozi Pharma
 
 Daily entry happens on `/dashboard`. New amounts are held temporarily in the browser, where users can review and delete them. Submitting saves the full batch atomically, closes the forms, and unlocks `/summary`. The next dashboard day starts at midnight in `Asia/Dhaka`; earlier submitted entries remain in history.
 
@@ -6,7 +6,9 @@ Read-only history is available at `/cash-sales`, `/credit-recovery`, `/supplier`
 
 ## Database setup
 
-For an existing project, the core entry workflow requires migrations through 008. Apply `supabase/migrations/010_admin_add_history_record.sql` **once** before using the admin add forms. It adds one transactional function and reuses existing tables. Migration 009 provides a database view for cumulative balances and renames legacy default display names; until it is applied, the app computes balances from paginated existing reports and displays legacy account names as User. For a new project, apply all migrations in filename order.
+For an existing project, apply any pending migrations **once**, in filename order, in Supabase SQL Editor. Migration `011_date_ranges_and_admin_dashboard.sql` adds inclusive date-range totals and admin dashboard batches. Migration `012_admin_delete_daily_report.sql` adds deletion of one selected submitted report and all its entries as a single transaction. For a new project, apply all migrations in filename order.
+
+History pages also work while migration 011 is pending: they use the previous totals function for all dates or one exact date, and calculate multi-day totals from all matching pages of the existing history view. Date and name filters remain active. Permission and network errors still surface as errors. Migration 011 remains required for saving admin dashboard batches.
 
 Migration 005 preserves each existing cash-sales daily total as a "Previous daily total" history row. The old implementation overwrote amounts, so individual earlier cash entries and their exact timestamps cannot be reconstructed. New cash entries have their own database timestamps. Existing administrator changes to a cash total are recorded as adjustments.
 
@@ -16,7 +18,17 @@ All users contribute to one combined report per business date. User1 and user2 s
 
 Administrators start at `/admin/summary`, which shows today's submitted report and has a date selector for older submitted reports. Its entries can be edited individually. The six category pages have matching `/admin/...` URLs, date filters, and Edit buttons. Administrator edits update the original record, preserve its entry time and author, record the editor and edit time, and recalculate the shared totals. Users cannot edit those records.
 
+The administrator's Settings link sits above Logout and opens `/admin/settings`. Change My Password verifies the current password before updating it. Change User Password sets a new password for a selected user account; it cannot target another administrator. Both forms require matching new passwords with at least 12 characters, and Supabase applies its project password rules. Passwords are handled by Supabase Auth and are never saved in the application's accounting tables or returned in action responses.
+
+For user password changes, set `SUPABASE_SECRET_KEY` (or the legacy `SUPABASE_SERVICE_ROLE_KEY`) in the server environment, including the hosting provider's environment variables, then restart/redeploy. The key must belong to the same project as `NEXT_PUBLIC_SUPABASE_URL` and must never use a `NEXT_PUBLIC_` variable. Own-password changes use the authenticated session and do not need this key. See `.env.example` and the [Supabase Admin API documentation](https://supabase.com/docs/reference/javascript/auth-admin-updateuserbyid).
+
+Daily Summary includes Delete This Report for its selected submitted or approved date. The administrator must type that date to confirm. Deletion permanently removes the report and all its cash, credit/recovery, supplier, local-supplier, overhead and conveyance entries, including legacy entries. Customer, supplier, overhead-name and user directories remain available. Running cash balances and outstanding dues update automatically. Other report dates remain unchanged. Deleting today's report allows a fresh report to be entered for that date.
+
 History and admin-summary tables keep their column headers and rows on phones; wide tables scroll horizontally.
+
+All history pages for users and administrators have inclusive Date From / Date To filters, which also filter totals and persist when paging. Cash in Hand remains a running balance including days before the selected range. All table headings, numbers, and form fields align left. The summary totals table and daily cash table fit phone screens.
+
+Administrators can open `/admin/dashboard`, select today or an earlier report date, and use the same temporary entry forms as users. Save Report Entries commits the whole batch atomically. A draft or missing report becomes submitted; additions to submitted or approved reports retain their existing status and submission/approval metadata. Administrator entries are attributed to the administrator, and cash corrections carry forward to later days. Users stay locked out of submitted report entry forms.
 
 On the admin Due / Recovery, Supplier, and Overhead Cost pages, the header button opens Add Person, Add Supplier Name, or Add Overhead. Only the name is required. A person or supplier may also have a phone number and an optional due/recovery or purchase/payment amount. An amount is recorded under the selected report date, or today when no date is selected; saving it does not change that report's status. Names without entries appear in the same table with blank amount cells and do not affect financial totals. Adding an overhead name makes it available in the user's existing overhead selector. Name-only additions clear filters so the new name is visible; additions with amounts keep the selected date and clear the old party/page filter.
 
@@ -35,3 +47,5 @@ npm run build
 Tests run all migrations against an isolated in-memory PostgreSQL database with Supabase Auth scaffolding. They do not connect to the Supabase project or use its credentials.
 
 `test:pages` starts a temporary Next.js development server on port 4317 and a local Supabase API fixture to check the real pages, name filters, submission gating, and read-only history requests.
+
+Optionally set `CASH_TOOL_BROWSER` to the full path of an installed Chrome/Chromium executable before running `test:pages`. It verifies summary and cash-history layouts at a 390px mobile viewport, saves screenshots under `.next-page-check/screenshots/`, and exercises customer/supplier search, entry types, contact details, temporary deletion, and the submission confirmation payload. These checks use the local fixture and do not connect to the Supabase project.

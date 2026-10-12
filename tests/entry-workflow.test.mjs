@@ -42,6 +42,12 @@ async function total() {
   return Number(result.rows[0].cash_sales)
 }
 
+async function rejectsQuery(query, params, pattern) {
+  await db.exec('savepoint expected_delete_failure')
+  try { await assert.rejects(db.query(query, params), pattern) }
+  finally { await db.exec('rollback to expected_delete_failure; release expected_delete_failure;') }
+}
+
 before(async () => {
   // Minimal Supabase Auth scaffolding. All application tables, views, policies,
   // functions and triggers come from the actual production migrations.
@@ -512,4 +518,176 @@ test('administrators can correct previous-day cash and legacy credit entries', a
   const saved = (await db.query("select * from public.entry_history where source='transaction' and id=$1", [legacy.id])).rows[0]
   assert.equal(saved.entry_type, 'credit_recovery')
   assert.equal(Number(saved.amount), 25)
+})
+
+test('admin dashboard batches save all categories to an already submitted report', async () => {
+  await actor(admin)
+  const before = (await db.query('select * from public.daily_reports where id=$1', [yesterdayId])).rows[0]
+  const entries = [
+    { kind: 'cash', amount: 200 },
+    { kind: 'customer', party_id: customerId, entry_type: 'credit_recovery', amount: 50 },
+    { kind: 'supplier', party_id: supplierId, entry_type: 'payment', amount: 20 },
+    { kind: 'transaction', category: 'cash_purchase', amount: 30 },
+    { kind: 'transaction', category: 'overhead', overhead_category_id: overheadId, amount: 40 },
+    { kind: 'transaction', category: 'conveyance', amount: 10 },
+  ]
+  await db.query('select public.admin_save_staged_report(public.current_business_date()-1,$1::jsonb)', [JSON.stringify(entries)])
+  const report = (await db.query('select * from public.daily_reports where id=$1', [yesterdayId])).rows[0]
+  assert.equal(report.status, 'submitted')
+  assert.equal(report.submitted_by, before.submitted_by)
+  assert.equal(report.submitted_at.toISOString(), before.submitted_at.toISOString())
+  assert.equal(Number(report.cash_sales), 600)
+  assert.equal(Number(report.cash_in_hand), 550)
+  assert.equal(Number((await db.query('select count(*) from public.entry_history where daily_report_id=$1 and created_by=$2', [yesterdayId, admin])).rows[0].count), 6)
+})
+
+test('admin dashboard can create and submit an earlier missing day', async () => {
+  await actor(admin)
+  await db.query("select public.admin_save_staged_report(public.current_business_date()-2,'[{\"kind\":\"cash\",\"amount\":100}]')")
+  const report = (await db.query('select * from public.daily_reports where business_date=public.current_business_date()-2')).rows[0]
+  assert.equal(report.status, 'submitted')
+  assert.equal(report.submitted_by, admin)
+  assert.equal(Number(report.cash_sales), 100)
+  const later = (await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [yesterdayId])).rows[0]
+  assert.equal(Number(later.cash_in_hand), 500)
+})
+
+test('admin dashboard additions preserve approval and roll back invalid batches', async () => {
+  await cash(100)
+  await submit()
+  await actor(admin)
+  await db.query("update public.daily_reports set status='approved' where id=$1", [todayId])
+  const approved = (await db.query('select approved_at from public.daily_reports where id=$1', [todayId])).rows[0]
+  await db.query("select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":50}]')")
+  const saved = (await db.query('select status,approved_at,cash_sales from public.daily_reports where id=$1', [todayId])).rows[0]
+  assert.equal(saved.status, 'approved')
+  assert.equal(saved.approved_at.toISOString(), approved.approved_at.toISOString())
+  assert.equal(Number(saved.cash_sales), 150)
+  await db.exec('savepoint invalid_admin_batch')
+  await assert.rejects(db.query("select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":999},{\"kind\":\"unknown\",\"amount\":1}]')"))
+  await db.exec('rollback to savepoint invalid_admin_batch')
+  assert.equal(await total(), 150)
+})
+
+test('admin dashboard rejects users, empty batches, future dates and invalid amounts', async () => {
+  await db.exec('savepoint forbidden_admin_batch')
+  await assert.rejects(db.query("select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":10}]')"), /Administrator access required/)
+  await db.exec('rollback to savepoint forbidden_admin_batch')
+  await actor(admin)
+  for (const query of [
+    "select public.admin_save_staged_report(public.current_business_date(),'[]')",
+    "select public.admin_save_staged_report(public.current_business_date()+1,'[{\"kind\":\"cash\",\"amount\":10}]')",
+    "select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":\"NaN\"}]')",
+    "select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":-1}]')",
+  ]) {
+    await db.exec('savepoint invalid_admin_input')
+    await assert.rejects(db.query(query))
+    await db.exec('rollback to savepoint invalid_admin_input')
+  }
+  assert.equal(await total(), 0)
+})
+
+test('range totals are inclusive and cash balances retain earlier carried cash', async () => {
+  await cash(100)
+  await credit('credit_recovery', 50)
+  await submit()
+  const current = (await db.query("select * from public.entry_history_totals('cash_sales',null,null,public.current_business_date(),public.current_business_date())")).rows[0]
+  assert.equal(Number(current.primary_total), 100)
+  assert.equal(Number(current.entry_count), 1)
+  const both = (await db.query("select * from public.entry_history_totals('cash_sales',null,null,public.current_business_date()-1,public.current_business_date())")).rows[0]
+  assert.equal(Number(both.primary_total), 500)
+  assert.equal(Number(both.entry_count), 2)
+  const closing = (await db.query('select * from public.cash_sales_history_totals(null,public.current_business_date(),public.current_business_date())')).rows[0]
+  assert.equal(Number(closing.report_count), 1)
+  assert.equal(Number(closing.total_sales), 100)
+  assert.equal(Number(closing.cash_in_hand), 550)
+  const old = (await db.query('select * from public.cash_sales_history_totals(null,null,public.current_business_date()-1)')).rows[0]
+  assert.equal(Number(old.cash_in_hand), 400)
+})
+
+test('admin deletion removes every category for one report and preserves directories and other dates', async () => {
+  const baselineDue = (await db.query('select current_due from public.customer_balances where id=$1', [customerId])).rows[0].current_due
+  await cash(100)
+  await credit('credit_sale', 100)
+  await credit('credit_recovery', 20)
+  await supplier('purchase', 80)
+  await supplier('payment', 25)
+  await expense('cash_purchase', 10)
+  await expense('overhead', 5)
+  await expense('conveyance', 2)
+  await submit()
+  await actor(admin)
+  const result = await db.query('select public.admin_delete_daily_report($1,public.current_business_date()) as id', [todayId])
+  assert.equal(result.rows[0].id, todayId)
+  for (const table of ['daily_reports', 'cash_sales_entries', 'customer_ledger_entries', 'supplier_ledger_entries', 'transactions']) {
+    const column = table === 'daily_reports' ? 'id' : 'daily_report_id'
+    assert.equal((await db.query(`select count(*)::int as count from public.${table} where ${column}=$1`, [todayId])).rows[0].count, 0)
+  }
+  assert.equal((await db.query('select count(*)::int as count from public.entry_history where daily_report_id=$1', [todayId])).rows[0].count, 0)
+  assert.equal((await db.query('select count(*)::int as count from public.daily_reports where id=$1', [yesterdayId])).rows[0].count, 1)
+  assert.equal((await db.query('select current_due from public.customer_balances where id=$1', [customerId])).rows[0].current_due, baselineDue)
+  for (const [table, id] of [['customers', customerId], ['suppliers', supplierId], ['overhead_categories', overheadId]]) {
+    assert.equal((await db.query(`select count(*)::int as count from public.${table} where id=$1`, [id])).rows[0].count, 1)
+  }
+  await actor(operator)
+  const replacement = (await db.query("insert into public.daily_reports(business_date,submitted_by) values(public.current_business_date(),$1) returning id,status", [operator])).rows[0]
+  assert.equal(replacement.status, 'draft')
+  await actor(admin)
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId], /not available/i)
+  assert.equal((await db.query('select count(*)::int as count from public.daily_reports where id=$1', [replacement.id])).rows[0].count, 1, 'stale confirmations cannot delete a replacement report')
+})
+
+test('deleting an older report removes legacy entries and recalculates later cash balances', async () => {
+  await cash(100)
+  await submit()
+  assert.equal(Number((await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [todayId])).rows[0].cash_in_hand), 500)
+  await actor(admin)
+  await db.query('select public.admin_delete_daily_report($1,public.current_business_date()-1)', [yesterdayId])
+  assert.equal((await db.query('select count(*)::int as count from public.entry_history where daily_report_id=$1', [yesterdayId])).rows[0].count, 0)
+  assert.equal(Number((await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [todayId])).rows[0].cash_in_hand), 100)
+  const totals = (await db.query('select * from public.cash_sales_history_totals()')).rows[0]
+  assert.equal(Number(totals.report_count), 1)
+  assert.equal(Number(totals.total_sales), 100)
+  assert.equal(Number(totals.cash_in_hand), 100)
+})
+
+test('approved report deletion handles negative cash adjustments without invalid intermediate totals', async () => {
+  await cash(100)
+  await cash(200)
+  await actor(admin)
+  await db.query("insert into public.cash_sales_entries(daily_report_id,amount,entry_type,created_by) values($1,-250,'adjustment',$2)", [todayId, admin])
+  await db.query("update public.daily_reports set status='approved' where id=$1", [todayId])
+  assert.equal(await total(), 50)
+  await db.query('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId])
+  assert.equal((await db.query('select count(*)::int as count from public.cash_sales_entries where daily_report_id=$1', [todayId])).rows[0].count, 0)
+})
+
+test('report deletion rejects operators, anonymous actors, drafts and mismatched report dates', async () => {
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date()-1)', [yesterdayId], /Administrator access required/i)
+  await actor('')
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date()-1)', [yesterdayId], /Administrator access required/i)
+  await actor(admin)
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId], /not available/i)
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date())', [yesterdayId], /not available/i)
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date()+1)', [yesterdayId], /valid report date/i)
+  const permissions = (await db.query("select has_function_privilege('anon','public.admin_delete_daily_report(bigint,date)','execute') as allowed")).rows[0]
+  assert.equal(permissions.allowed, false)
+  assert.equal((await db.query('select count(*)::int as count from public.daily_reports')).rows[0].count, 2)
+})
+
+test('failed report deletion rolls back all child deletions', async () => {
+  await cash(100)
+  await credit('credit_sale', 50)
+  await supplier('payment', 10)
+  await expense('conveyance', 5)
+  await submit()
+  await actor(admin)
+  await db.exec('reset role; create table public.deletion_blocker(report_id bigint references public.daily_reports(id));')
+  await db.query('insert into deletion_blocker values($1)', [todayId])
+  await db.exec('set local role authenticated;')
+  await rejectsQuery('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId], /foreign key constraint/i)
+  for (const table of ['cash_sales_entries', 'customer_ledger_entries', 'supplier_ledger_entries', 'transactions']) {
+    assert.equal((await db.query(`select count(*)::int as count from public.${table} where daily_report_id=$1`, [todayId])).rows[0].count, 1)
+  }
+  assert.equal(await total(), 100)
 })

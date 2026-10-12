@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
-import { Home, ListPlus, PieChart, Menu, X, Banknote, UsersRound, Truck, ShoppingBasket, ReceiptText, Bike, LogOut, UserCog } from 'lucide-react'
+import { Home, ListPlus, PieChart, Menu, X, Banknote, UsersRound, Truck, ShoppingBasket, ReceiptText, Bike, LogOut, UserCog, Settings } from 'lucide-react'
 import { logoutAction } from '@/app/actions'
 
 const entries = [
@@ -21,10 +21,10 @@ function Item({ href, label, Icon, onClick }) {
 export function UserNavigation({ name }) {
   const [open, setOpen] = useState(false)
   return <>
-    <header className="mobile-header"><div><strong>Pharmacy Accounts</strong><small>{name}</small></div><button className="icon-button" onClick={() => setOpen(true)} aria-label="Open menu"><Menu /></button></header>
+    <header className="mobile-header"><div><strong>Ozi Pharma</strong><small>{name}</small></div><button className="icon-button" onClick={() => setOpen(true)} aria-label="Open menu"><Menu /></button></header>
     {open && <button className="drawer-backdrop" aria-label="Close menu" onClick={() => setOpen(false)} />}
     <aside className={`user-sidebar ${open ? 'open' : ''}`}>
-      <div className="brand"><span className="brand-mark">Rx</span><div><strong>Pharmacy Accounts</strong><small>Daily finance</small></div><button className="icon-button close" onClick={() => setOpen(false)}><X /></button></div>
+      <div className="brand"><span className="brand-mark">OP</span><div><strong>Ozi Pharma</strong><small>Daily finance</small></div><button className="icon-button close" onClick={() => setOpen(false)}><X /></button></div>
       <nav><Item href="/dashboard" label="Dashboard" Icon={Home} onClick={() => setOpen(false)} /><p className="nav-label">History</p>{entries.map(([href, label, Icon]) => <Item key={href} href={href} label={label} Icon={Icon} onClick={() => setOpen(false)} />)}<p className="nav-label">Report</p><Item href="/summary" label="Today's Summary" Icon={PieChart} onClick={() => setOpen(false)} /></nav>
       <form action={logoutAction}><button className="nav-link logout"><LogOut size={20} />Logout</button></form>
     </aside>
@@ -34,15 +34,15 @@ export function UserNavigation({ name }) {
 
 export function AdminNavigation({ name }) {
   const [open, setOpen] = useState(false)
-  const links = [['/admin/summary', 'Daily Summary', PieChart], ...entries.map(([href, label, Icon]) => [`/admin${href}`, label, Icon]), ['/admin/users', 'Users', UserCog]]
+  const links = [['/admin/dashboard', 'Dashboard', Home], ['/admin/summary', 'Daily Summary', PieChart], ...entries.map(([href, label, Icon]) => [`/admin${href}`, label, Icon]), ['/admin/users', 'Users', UserCog]]
   return <>
-    <header className="mobile-header"><div><strong>Admin Console</strong><small>{name}</small></div><button className="icon-button" onClick={() => setOpen(true)}><Menu /></button></header>
+    <header className="mobile-header"><div><strong>Ozi Pharma</strong><small>{name}</small></div><button className="icon-button" onClick={() => setOpen(true)}><Menu /></button></header>
     {open && <button className="drawer-backdrop" onClick={() => setOpen(false)} />}
     <aside className={`user-sidebar admin-sidebar ${open ? 'open' : ''}`}>
-      <div className="brand"><span className="brand-mark">Rx</span><div><strong>Admin Console</strong><small>{name}</small></div><button className="icon-button close" onClick={() => setOpen(false)}><X /></button></div>
+      <div className="brand"><span className="brand-mark">OP</span><div><strong>Ozi Pharma</strong><small>{name}</small></div><button className="icon-button close" onClick={() => setOpen(false)}><X /></button></div>
       <nav>{links.map(([href, label, Icon]) => <Item key={href} href={href} label={label} Icon={Icon} onClick={() => setOpen(false)} />)}</nav>
-      <form action={logoutAction}><button className="nav-link logout"><LogOut size={20} />Logout</button></form>
+      <div className="sidebar-footer"><Item href="/admin/settings" label="Settings" Icon={Settings} onClick={() => setOpen(false)} /><form action={logoutAction}><button className="nav-link logout"><LogOut size={20} />Logout</button></form></div>
     </aside>
-    <nav className="bottom-nav admin-bottom-nav"><Item href="/admin/summary" label="Summary" Icon={PieChart} /><Item href="/admin/cash-sales" label="Cash Sales" Icon={Banknote} /><button onClick={() => setOpen(true)} className="nav-link"><Menu size={20} /><span>Menu</span></button></nav>
+    <nav className="bottom-nav admin-bottom-nav"><Item href="/admin/dashboard" label="Dashboard" Icon={Home} /><Item href="/admin/summary" label="Summary" Icon={PieChart} /><Item href="/admin/cash-sales" label="Cash Sales" Icon={Banknote} /><button onClick={() => setOpen(true)} className="nav-link"><Menu size={20} /><span>Menu</span></button></nav>
   </>
 }

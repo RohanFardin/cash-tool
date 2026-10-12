@@ -4,19 +4,17 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { businessDate } from '@/lib/format'
-import { requireRole } from '@/lib/auth'
+import { requireRole, requireUser } from '@/lib/auth'
 import { historyCategories, validHistoryDate } from '@/lib/history'
 
-const categories = new Set(['credit', 'supplier_payment', 'cash_purchase', 'overhead', 'conveyance'])
-const subtypes = new Set(['credit_sale', 'credit_recovery'])
 const usernamePattern = /^[a-z0-9._-]{2,40}$/
 
 const ok = (message) => ({ ok: true, message })
 const bad = (message) => ({ ok: false, message })
 
-function amount(value, allowZero = false) {
+function amount(value) {
   const number = Number(value)
-  if (!Number.isFinite(number) || (allowZero ? number < 0 : number <= 0)) return null
+  if (!Number.isFinite(number) || number <= 0) return null
   return Math.round(number * 100) / 100
 }
 
@@ -25,15 +23,24 @@ function clean(value, max = 250) {
   return result ? result.slice(0, max) : null
 }
 
-function refreshUserPages() {
-  ['/dashboard', '/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance', '/summary']
-    .forEach((path) => revalidatePath(path))
+function refreshAccountingPages() {
+  const paths = ['/dashboard', '/summary', ...Object.values(historyCategories).map((category) => category.path)]
+  for (const prefix of ['', '/admin']) {
+    for (const path of paths) revalidatePath(prefix + path)
+  }
 }
 
-function refreshAdminPages() {
-  ['/admin/summary', '/admin/cash-sales', '/admin/credit-recovery', '/admin/supplier',
-    '/admin/local-supplier', '/admin/overhead-cost', '/admin/conveyance']
-    .forEach((path) => revalidatePath(path))
+function stagedEntries(formData, admin = false) {
+  const raw = String(formData.get('staged_entries') || '[]')
+  if (raw.length > 250000) return { error: 'There are too many entries to save at once.' }
+  let entries
+  try { entries = JSON.parse(raw) } catch {
+    return { error: 'The temporary entries could not be read. Please try again.' }
+  }
+  if (!Array.isArray(entries) || entries.length > 500 || (admin && !entries.length)) {
+    return { error: admin ? 'Add between 1 and 500 entries before saving.' : 'The temporary entries are invalid.' }
+  }
+  return { entries }
 }
 
 export async function adminEditEntryAction(_previous, formData) {
@@ -53,8 +60,7 @@ export async function adminEditEntryAction(_previous, formData) {
       p_description: clean(formData.get('description'), 500),
     })
     if (error) throw error
-    refreshUserPages()
-    refreshAdminPages()
+    refreshAccountingPages()
     return ok('Entry updated.')
   } catch (error) {
     console.error('adminEditEntryAction', error)
@@ -91,27 +97,36 @@ function positiveId(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-export async function addCustomerAction(_previous, formData) {
-  const { user } = await requireRole('user')
+async function addParty(kind, formData, userId) {
+  const customer = kind === 'customer'
   const name = clean(formData.get('name'), 150)
-  const phoneNumber = clean(formData.get('phone_number'), 30)
-  const notes = clean(formData.get('notes'), 500)
-  if (!name) return bad('Enter the customer’s name.')
+  if (!name) return bad(customer ? 'Enter the customer’s name.' : 'Enter the company name.')
   try {
     const supabase = await createClient()
-    const { data, error } = await supabase.from('customers').insert({
-      name, phone_number: phoneNumber, notes, opening_due: 0, created_by: user.id,
+    const { data, error } = await supabase.from(customer ? 'customers' : 'suppliers').insert({
+      name, phone_number: clean(formData.get('phone_number'), 30),
+      notes: clean(formData.get('notes'), 500), opening_due: 0, created_by: userId,
     }).select('id, name, phone_number, notes').single()
-    if (error) {
-      if (error.code === '23505') return bad('That customer already exists. Select the name from search.')
-      throw error
-    }
-    refreshUserPages()
-    return { ...ok(`${data.name} added.`), customer: data }
+    if (error?.code === '23505') return bad(customer
+      ? 'That customer already exists. Select the name from search.'
+      : 'That company already exists. Select it from search.')
+    if (error) throw error
+    refreshAccountingPages()
+    return { ...ok(data.name + ' added.'), [kind]: data }
   } catch (error) {
-    console.error('addCustomerAction', error)
-    return bad('Unable to add the customer. Please try again.')
+    console.error('addParty', kind, error)
+    return bad(customer ? 'Unable to add the customer. Please try again.' : 'Unable to add the company. Please try again.')
   }
+}
+
+export async function addCustomerAction(_previous, formData) {
+  const { user } = await requireUser()
+  return addParty('customer', formData, user.id)
+}
+
+export async function addSupplierAction(_previous, formData) {
+  const { user } = await requireUser()
+  return addParty('supplier', formData, user.id)
 }
 
 export async function adminAddHistoryRecordAction(_previous, formData) {
@@ -139,8 +154,7 @@ export async function adminAddHistoryRecordAction(_previous, formData) {
     })
     if (error?.code === '23505') return bad('That name already exists. Use the existing record.')
     if (error) throw error
-    refreshUserPages()
-    refreshAdminPages()
+    refreshAccountingPages()
     return { ...ok(`${name} added.`), entryRecorded: value !== null, businessDate: reportDate }
   } catch (error) {
     console.error('adminAddHistoryRecordAction', error)
@@ -148,78 +162,18 @@ export async function adminAddHistoryRecordAction(_previous, formData) {
   }
 }
 
-export async function addSupplierAction(_previous, formData) {
-  const { user } = await requireRole('user')
-  const name = clean(formData.get('name'), 150)
-  const phoneNumber = clean(formData.get('phone_number'), 30)
-  const notes = clean(formData.get('notes'), 500)
-  if (!name) return bad('Enter the company name.')
-  try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from('suppliers').insert({
-      name, phone_number: phoneNumber, notes, opening_due: 0, created_by: user.id,
-    }).select('id, name, phone_number, notes').single()
-    if (error) {
-      if (error.code === '23505') return bad('That company already exists. Select it from search.')
-      throw error
-    }
-    refreshUserPages()
-    return { ...ok(`${data.name} added.`), supplier: data }
-  } catch (error) {
-    console.error('addSupplierAction', error)
-    return bad('Unable to add the company. Please try again.')
-  }
-}
-
-export async function deleteCustomerLedgerAction(_previous, formData) {
-  await requireRole('user')
-  return bad('Saved entries cannot be deleted.')
-}
-
-export async function deleteSupplierLedgerAction(_previous, formData) {
-  await requireRole('user')
-  return bad('Saved entries cannot be deleted.')
-}
-
-function transactionInput(formData) {
-  const category = String(formData.get('category') || '')
-  const name = clean(formData.get('name'), 150)
-  const value = amount(formData.get('amount'))
-  const description = clean(formData.get('description'), 500)
-  let transaction_subtype = clean(formData.get('transaction_subtype'), 30)
-  if (!categories.has(category)) return { error: 'Invalid transaction category.' }
-  if (!name) return { error: 'Name is required.' }
-  if (value === null) return { error: 'Amount must be greater than zero.' }
-  if (category === 'credit' && !subtypes.has(transaction_subtype)) return { error: 'Select a credit transaction type.' }
-  if (category !== 'credit') transaction_subtype = null
-  return { category, name, amount: value, description, transaction_subtype }
-}
-
-export async function deleteTransactionAction(_previous, formData) {
-  await requireRole('user')
-  return bad('Saved entries cannot be deleted.')
-}
-
 export async function submitReportAction(_previous, formData) {
   await requireRole('user')
   if (formData.get('confirm') !== 'yes') return bad('Please confirm report submission.')
-  const rawEntries = String(formData.get('staged_entries') || '[]')
-  if (rawEntries.length > 250000) return bad('There are too many entries to submit at once.')
-  let entries
-  try {
-    entries = JSON.parse(rawEntries)
-  } catch {
-    return bad('The temporary entries could not be read. Please try again.')
-  }
-  if (!Array.isArray(entries) || entries.length > 500) return bad('The temporary entries are invalid.')
+  const { entries, error: entryError } = stagedEntries(formData)
+  if (entryError) return bad(entryError)
   try {
     const supabase = await createClient()
     const { error } = await supabase.rpc('submit_staged_report', {
       p_business_date: businessDate(), p_entries: entries,
     })
     if (error) throw error
-    refreshUserPages()
-    refreshAdminPages()
+    refreshAccountingPages()
     return ok('Today’s report submitted successfully.')
   } catch (error) {
     console.error('submitReportAction', error)
@@ -227,82 +181,40 @@ export async function submitReportAction(_previous, formData) {
   }
 }
 
-export async function approveReportAction(_previous, formData) {
+export async function adminSaveReportEntriesAction(_previous, formData) {
   await requireRole('superadmin')
+  if (formData.get('confirm') !== 'yes') return bad('Please confirm saving these entries.')
+  const date = validHistoryDate(formData.get('business_date'))
+  if (!date || date > businessDate()) return bad('Select today or an earlier report date.')
+  const { entries, error: entryError } = stagedEntries(formData, true)
+  if (entryError) return bad(entryError)
   try {
-    const id = String(formData.get('id'))
     const supabase = await createClient()
-    const { error } = await supabase.from('daily_reports').update({ status: 'approved' }).eq('id', id)
+    const { error } = await supabase.rpc('admin_save_staged_report', { p_business_date: date, p_entries: entries })
     if (error) throw error
-    revalidatePath('/admin')
-    revalidatePath('/admin/reports')
-    revalidatePath(`/admin/reports/${id}`)
-    return ok('Report approved and locked.')
+    refreshAccountingPages()
+    return ok('Entries saved to the selected report.')
   } catch (error) {
-    console.error('approveReportAction', error)
-    return bad('Unable to approve the report.')
+    console.error('adminSaveReportEntriesAction', error)
+    return bad('Unable to save these entries. Check the amounts and selected names.')
   }
 }
 
-export async function adminUpdateReportAction(_previous, formData) {
+export async function adminDeleteReportAction(_previous, formData) {
   await requireRole('superadmin')
-  const cashSales = amount(formData.get('cash_sales'), true)
-  const status = String(formData.get('status') || '')
-  if (cashSales === null) return bad('Cash sales must be zero or greater.')
-  if (!['draft', 'submitted', 'approved'].includes(status)) return bad('Invalid report status.')
+  const id = positiveId(formData.get('report_id'))
+  const date = validHistoryDate(formData.get('business_date'))
+  if (!id || !date || date > businessDate()) return bad('Select a valid report date.')
+  if (formData.get('confirm') !== 'yes' || formData.get('confirm_date') !== date) return bad('Type the selected report date to confirm deletion.')
   try {
-    const id = String(formData.get('id'))
     const supabase = await createClient()
-    const { error } = await supabase.rpc('admin_update_daily_report', {
-      p_report_id: id, p_cash_sales: cashSales, p_status: status,
-      p_notes: clean(formData.get('notes'), 1000),
-    })
+    const { error } = await supabase.rpc('admin_delete_daily_report', { p_report_id: id, p_business_date: date })
+    if (error?.code === 'PGRST202') return bad('Report deletion is not available yet. Apply the latest database migration.')
     if (error) throw error
-    revalidatePath('/admin')
-    revalidatePath('/admin/reports')
-    revalidatePath(`/admin/reports/${id}`)
-    refreshUserPages()
-    return ok('Report updated.')
+    refreshAccountingPages()
+    return ok(`The report and all entries for ${date} have been deleted.`)
   } catch (error) {
-    console.error('adminUpdateReportAction', error)
-    return bad('Unable to update the report.')
-  }
-}
-
-export async function adminSaveTransactionAction(_previous, formData) {
-  await requireRole('superadmin')
-  const input = transactionInput(formData)
-  if (input.error) return bad(input.error)
-  try {
-    const id = String(formData.get('id'))
-    const reportId = String(formData.get('report_id'))
-    const supabase = await createClient()
-    const { error } = await supabase.from('transactions').update(input).eq('id', id)
-    if (error) throw error
-    revalidatePath('/admin')
-    revalidatePath('/admin/reports')
-    revalidatePath(`/admin/reports/${reportId}`)
-    revalidatePath('/admin/transactions')
-    return ok('Transaction updated.')
-  } catch (error) {
-    console.error('adminSaveTransactionAction', error)
-    return bad('Unable to update the transaction.')
-  }
-}
-
-export async function adminDeleteTransactionAction(_previous, formData) {
-  await requireRole('superadmin')
-  try {
-    const id = String(formData.get('id'))
-    const reportId = String(formData.get('report_id'))
-    const supabase = await createClient()
-    const { error } = await supabase.from('transactions').delete().eq('id', id)
-    if (error) throw error
-    revalidatePath(`/admin/reports/${reportId}`)
-    revalidatePath('/admin/transactions')
-    return ok('Transaction deleted.')
-  } catch (error) {
-    console.error('adminDeleteTransactionAction', error)
-    return bad('Unable to delete the transaction.')
+    console.error('adminDeleteReportAction', { code: error.code, message: error.message })
+    return bad('Unable to delete this report. Reload the selected date and try again.')
   }
 }

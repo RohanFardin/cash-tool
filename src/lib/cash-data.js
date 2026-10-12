@@ -1,7 +1,7 @@
 import { cache } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { businessDate } from '@/lib/format'
-import { historyFilters, HISTORY_PAGE_SIZE } from '@/lib/history'
+import { historyFilters, historyDateRange, HISTORY_PAGE_SIZE } from '@/lib/history'
 import { cumulativeCashReports } from '@/lib/cash'
 
 // Existing projects can calculate balances before migration 009 is applied.
@@ -25,7 +25,9 @@ const getSubmittedCashReports = cache(async (date) => {
 })
 
 async function getReportCashSalesHistory(params) {
-  const reports = (await getSubmittedCashReports(businessDate())).toReversed()
+  const range = historyDateRange(params)
+  const reports = (await getSubmittedCashReports(businessDate())).filter((report) =>
+    (!range.from || report.business_date >= range.from) && (!range.to || report.business_date <= range.to)).toReversed()
   const totals = {
     report_count: reports.length,
     total_sales: reports.reduce((sum, report) => sum + Math.round(report.total_sales * 100), 0) / 100,
@@ -33,7 +35,7 @@ async function getReportCashSalesHistory(params) {
   }
   const pages = Math.max(1, Math.ceil(reports.length / HISTORY_PAGE_SIZE))
   const page = Math.min(historyFilters(params).page, pages)
-  return { reports: reports.slice((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE), totals, page, pages }
+  return { reports: reports.slice((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE), totals, page, pages, ...range }
 }
 
 export async function getCashBalance(date, { before = false } = {}) {
@@ -51,17 +53,22 @@ export async function getCashBalance(date, { before = false } = {}) {
 }
 
 export async function getCashSalesHistory(params = {}) {
+  const range = historyDateRange(params)
+  if (range.rangeError) return { ...range, reports: [], totals: { report_count: 0, total_sales: 0, cash_in_hand: 0 }, page: 1, pages: 1 }
   const supabase = await createClient()
-  const { data: totalsRows, error: totalsError } = await supabase.rpc('cash_sales_history_totals')
+  const { data: totalsRows, error: totalsError } = await supabase.rpc('cash_sales_history_totals', { p_date_from: range.from, p_date_to: range.to })
   if (totalsError?.code === 'PGRST202') return getReportCashSalesHistory(params)
   if (totalsError) throw new Error('Unable to load cash sales totals.')
   const totals = totalsRows?.[0] || { report_count: 0, total_sales: 0, cash_in_hand: 0 }
   const pages = Math.max(1, Math.ceil(Number(totals.report_count) / HISTORY_PAGE_SIZE))
   const page = Math.min(historyFilters(params).page, pages)
-  const { data, error } = await supabase.from('daily_cash_balances').select('*')
+  let query = supabase.from('daily_cash_balances').select('*')
     .lte('business_date', businessDate()).order('business_date', { ascending: false })
     .range((page - 1) * HISTORY_PAGE_SIZE, page * HISTORY_PAGE_SIZE - 1)
+  if (range.from) query = query.gte('business_date', range.from)
+  if (range.to) query = query.lte('business_date', range.to)
+  const { data, error } = await query
   if (error?.code === 'PGRST205') return getReportCashSalesHistory(params)
   if (error) throw new Error('Unable to load cash sales history.')
-  return { reports: data || [], totals, page, pages }
+  return { reports: data || [], totals, page, pages, ...range }
 }

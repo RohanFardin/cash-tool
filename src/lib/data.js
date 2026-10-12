@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { businessDate, displayUserName } from '@/lib/format'
 import { getCashBalance } from '@/lib/cash-data'
 
-export function totals(report, transactions = [], customerEntries = [], supplierEntries = []) {
+function totals(report, transactions = [], customerEntries = [], supplierEntries = []) {
   const result = {
     cash_sales: Number(report?.cash_sales || 0),
     credit_sales: 0,
@@ -33,9 +33,8 @@ export function totals(report, transactions = [], customerEntries = [], supplier
   return result
 }
 
-export async function getTodayReport() {
+export async function getTodayReport(date = businessDate()) {
   const supabase = await createClient()
-  const date = businessDate()
   const { data: report, error } = await supabase.from('daily_reports').select('*').eq('business_date', date).maybeSingle()
   if (error) throw new Error('Unable to load today’s report.')
   if (!report) {
@@ -66,9 +65,9 @@ export async function getTodayReport() {
   }
 }
 
-export async function getDailyEntryPortal() {
+export async function getDailyEntryPortal(date = businessDate()) {
   const supabase = await createClient()
-  const today = await getTodayReport()
+  const today = await getTodayReport(date)
   const [customersResult, suppliersResult, overheadResult, profilesResult, openingBalance] = await Promise.all([
     supabase.from('customer_balances').select('*').eq('active', true).order('name'),
     supabase.from('supplier_balances').select('*').eq('active', true).order('name'),
@@ -97,24 +96,5 @@ export async function getDailyEntryPortal() {
     openingCashInHand: openingBalance.cashInHand,
     cashInHand: Math.round((openingBalance.cashInHand + Number(today.report?.cash_in_hand || 0)) * 100) / 100,
     cashBalanceDate: today.report && today.report.status !== 'draft' ? today.date : openingBalance.asOfDate,
-  }
-}
-
-export async function getReportDetail(id) {
-  const supabase = await createClient()
-  const { data: report, error } = await supabase.from('daily_reports')
-    .select('*, profiles!daily_reports_submitted_by_fkey(full_name)').eq('id', id).single()
-  if (error) return null
-  const [{ data: transactions }, { data: customerEntries }, { data: supplierEntries }] = await Promise.all([
-    supabase.from('transactions').select('*').eq('daily_report_id', id).order('created_at'),
-    supabase.from('customer_ledger_entries').select('*').eq('daily_report_id', id).order('created_at'),
-    supabase.from('supplier_ledger_entries').select('*').eq('daily_report_id', id).order('created_at'),
-  ])
-  return {
-    report,
-    transactions: transactions || [],
-    customerEntries: customerEntries || [],
-    supplierEntries: supplierEntries || [],
-    totals: totals(report, transactions, customerEntries, supplierEntries),
   }
 }
