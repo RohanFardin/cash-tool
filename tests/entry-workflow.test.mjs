@@ -12,6 +12,7 @@ let yesterdayId
 let customerId
 let supplierId
 let overheadId
+let initialAdminEditMode
 
 async function actor(id) {
   await db.query("select set_config('request.jwt.claim.sub', $1, false)", [id])
@@ -82,6 +83,8 @@ before(async () => {
     }
   }
   await actor(admin)
+  initialAdminEditMode = (await db.query('select entry_editing_enabled from public.profiles where id=$1', [admin])).rows[0].entry_editing_enabled
+  await db.query('update public.profiles set entry_editing_enabled=true where id=$1', [admin])
   customerId = (await db.query("insert into public.customers (name,created_by) values ('Alice',$1) returning id", [admin])).rows[0].id
   supplierId = (await db.query("insert into public.suppliers (name,created_by) values ('Medicine Company',$1) returning id", [admin])).rows[0].id
   overheadId = (await db.query("insert into public.overhead_categories (name,created_by) values ('Rent',$1) returning id", [admin])).rows[0].id
@@ -95,6 +98,65 @@ beforeEach(async () => {
 })
 afterEach(async () => { await db.exec('rollback;') })
 after(async () => { await db.close() })
+
+test('entry editing starts off and administrators can enable and disable it for their own account', async () => {
+  assert.equal(initialAdminEditMode, false)
+  const entry = (await cash(100)).rows[0]
+  await actor(admin)
+  await db.query('update public.profiles set entry_editing_enabled=false where id=$1', [admin])
+  await rejectsQuery("select public.admin_edit_entry('cash',$1,150)", [entry.id], /Enable entry editing in Settings/i)
+  await db.query('update public.profiles set entry_editing_enabled=true where id=$1', [admin])
+  await db.query("select public.admin_edit_entry('cash',$1,150)", [entry.id])
+  assert.equal(await total(), 150)
+  await db.query('update public.profiles set entry_editing_enabled=false where id=$1', [admin])
+  await rejectsQuery("select public.admin_edit_entry('cash',$1,200)", [entry.id], /Enable entry editing in Settings/i)
+  assert.equal(await total(), 150)
+})
+
+test('editing off blocks direct updates to every saved entry table while admin entry and report deletion still work', async () => {
+  await cash(100)
+  await credit('credit_sale', 20)
+  await supplier('payment', 10)
+  await expense('conveyance', 5)
+  await submit()
+  await actor(admin)
+  await db.query('update public.profiles set entry_editing_enabled=false where id=$1', [admin])
+  for (const table of ['cash_sales_entries', 'customer_ledger_entries', 'supplier_ledger_entries', 'transactions']) {
+    await rejectsQuery(`update public.${table} set amount=500 where daily_report_id=$1`, [todayId], /Enable entry editing in Settings/i)
+  }
+  await db.query("select public.admin_save_staged_report(public.current_business_date(),'[{\"kind\":\"cash\",\"amount\":5}]')")
+  assert.equal(await total(), 105)
+  await db.query('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId])
+  assert.equal((await db.query('select count(*)::int as count from public.daily_reports where id=$1', [todayId])).rows[0].count, 0)
+})
+
+test('users cannot enable entry editing or rename themselves and admins can rename users without changing login identity', async () => {
+  const own = await db.query('update public.profiles set entry_editing_enabled=true,full_name=$1 where id=$2 returning id', ['Changed by user', operator])
+  assert.equal(own.rows.length, 0)
+  await actor(admin)
+  const original = (await db.query('select * from public.profiles where id=$1', [operator])).rows[0]
+  await db.query('update public.profiles set full_name=$1 where id=$2', ['Rafiq Hasan', operator])
+  const renamed = (await db.query('select * from public.profiles where id=$1', [operator])).rows[0]
+  assert.equal(renamed.full_name, 'Rafiq Hasan')
+  assert.equal(renamed.username, original.username)
+  assert.equal(renamed.role, 'user')
+  assert.equal(renamed.id, original.id)
+})
+
+test('submission identifies the user who submits rather than the user who created the shared report', async () => {
+  await cash(100)
+  await actor(secondOperator)
+  await submit()
+  await actor(admin)
+  const submitted = (await db.query('select r.submitted_by,p.full_name,r.business_date from public.daily_reports r join public.profiles p on p.id=r.submitted_by where r.id=$1', [todayId])).rows[0]
+  assert.equal(submitted.submitted_by, secondOperator)
+  const reportDate = submitted.business_date
+  await db.query('update public.profiles set full_name=$1 where id=$2', ['Renamed Submitter', secondOperator])
+  const renamed = (await db.query('select r.submitted_by,p.full_name,r.business_date from public.daily_reports r join public.profiles p on p.id=r.submitted_by where r.id=$1', [todayId])).rows[0]
+  assert.equal(renamed.full_name, 'Renamed Submitter')
+  assert.equal(renamed.submitted_by, secondOperator)
+  assert.deepEqual(renamed.business_date, reportDate)
+})
 
 test('cash entries accumulate without overwriting and use database timestamps', async () => {
   const first = (await cash(100.25)).rows[0]

@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 // Optional real-browser check using an installed Chromium/Chrome executable.
 // All pages and credentials come from check-pages.mjs's local fixture.
 export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
+  const editingModeChanges = []
   const browser = spawn(process.env.CASH_TOOL_BROWSER, [
     '--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-extensions',
     '--remote-debugging-port=4320', `--user-data-dir=${resolve('.next-page-check/browser-profile')}`, 'about:blank',
@@ -39,7 +40,15 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     })
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' })
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true })
-    const page = (method, params) => send(method, params, sessionId)
+    const page = async (method, params) => {
+      const result = await send(method, params, sessionId)
+      if (method === 'Page.navigate') {
+        // Streamed Next.js content can exist inside a hidden loading segment.
+        // Wait for the page to become visible before measuring any controls.
+        await waitFor(`location.href === ${JSON.stringify(params.url)} && document.readyState === 'complete' && getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() === '#0b6b57' && document.querySelector('.app-content .page-stack')?.getBoundingClientRect().width > 0`)
+      }
+      return result
+    }
     const evaluate = async (expression) => {
       const value = await page('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
       assert.ok(!value.exceptionDetails, value.exceptionDetails?.text)
@@ -78,16 +87,34 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
         const wrapper = table.closest('.ledger-table-wrap');
         return { viewport: innerWidth, clientWidth: wrapper.clientWidth, scrollWidth: wrapper.scrollWidth,
           alignment: [...table.querySelectorAll('th, td')].map(cell => getComputedStyle(cell).textAlign),
-          tableRight: table.getBoundingClientRect().right };
+          tableRight: table.getBoundingClientRect().right, wrapperRight: wrapper.getBoundingClientRect().right,
+          tableWidth: getComputedStyle(table).width, tableMinWidth: getComputedStyle(table).minWidth,
+          wrapperWidth: getComputedStyle(wrapper).width, media: matchMedia('(max-width: 760px)').matches,
+          styleUrls: [...document.styleSheets].map(sheet => sheet.href),
+          firstColumnsRight: [...table.querySelectorAll('thead th')].slice(0, 2).map(cell => cell.getBoundingClientRect().right),
+          recordsLeft: table.querySelector('thead th:nth-child(3)').getBoundingClientRect().left };
       })()`, returnByValue: true })
       const layout = result.result.value
       assert.equal(layout.viewport, 390)
-      assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${path} fits without horizontal scrolling`)
-      assert.ok(layout.tableRight <= layout.viewport, `${path} amounts are inside the viewport`)
+      if (selector === '.summary-table') {
+        if (layout.scrollWidth <= layout.clientWidth) {
+          const screenshot = await page('Page.captureScreenshot', { format: 'png' })
+          await writeFile('.next-page-check/screenshots/layout-failure.png', Buffer.from(screenshot.data, 'base64'))
+        }
+        assert.ok(layout.scrollWidth > layout.clientWidth, `Records are available by horizontal scrolling: ${JSON.stringify(layout)}`)
+        assert.ok(layout.firstColumnsRight.every(right => right <= layout.wrapperRight + 1), 'Section and Total Amount fit the initial view')
+        assert.ok(layout.recordsLeft >= layout.wrapperRight - 2, 'Records starts outside the initial view')
+        await evaluate("document.querySelector('.summary-table-wrap').scrollLeft = 9999")
+        assert.ok(await evaluate("document.querySelector('.summary-table thead th:nth-child(3)').getBoundingClientRect().right <= document.querySelector('.summary-table-wrap').getBoundingClientRect().right + 1"), 'scrolling reveals Records')
+        await evaluate("document.querySelector('.summary-table-wrap').scrollLeft = 0")
+      } else {
+        assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${path} fits without horizontal scrolling`)
+        assert.ok(layout.tableRight <= layout.viewport, `${path} amounts are inside the viewport`)
+      }
       assert.ok(layout.alignment.every((alignment) => alignment === 'left'), `${path} columns and amounts align left`)
       const screenshot = await page('Page.captureScreenshot', { format: 'png' })
       await writeFile(`.next-page-check/screenshots/${name}.png`, Buffer.from(screenshot.data, 'base64'))
-      console.log(`PASS mobile ${path}: fits 390px screen; all columns align left`)
+      console.log(`PASS mobile ${path}: ${selector === '.summary-table' ? 'Section/Amount visible, Records revealed by scrolling' : 'fits 390px screen'}; columns align left`)
     }
     const split = adminHeaders.cookie.indexOf('=')
     await page('Network.setCookie', { name: adminHeaders.cookie.slice(0, split), value: adminHeaders.cookie.slice(split + 1), url: appUrl })
@@ -146,6 +173,25 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     assert.ok(settingsLayout.width <= settingsLayout.viewport, 'password settings fit the phone screen')
     assert.ok(settingsLayout.fieldAlignment.every(value => value === 'left'))
     assert.deepEqual(settingsLayout.links, ['Settings', 'Logout'])
+    await waitFor("Object.keys(document.querySelector('.editing-switch')).some(key => key.startsWith('__reactProps$'))")
+    await evaluate(`(() => {
+      const select = document.querySelector('#user-names select');
+      select.value = select.options[1].value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`)
+    await waitFor("document.querySelector('#user-names input[name=full_name]').value.length > 0")
+    for (const enabled of [false, true, false, true]) {
+      await evaluate("document.querySelector('.editing-switch').click()")
+      await waitFor(`document.querySelector('.editing-switch').getAttribute('aria-checked') === '${enabled}' && !document.querySelector('.editing-switch').disabled`)
+      editingModeChanges.push(enabled)
+      await page('Page.navigate', { url: appUrl + '/admin/supplier' })
+      await waitFor("document.readyState === 'complete' && Boolean(document.querySelector('.ledger-table'))")
+      assert.equal(await evaluate("Boolean(document.querySelector('.table-edit'))"), enabled, 'saved edit mode applies after navigation')
+      await page('Page.navigate', { url: appUrl + '/admin/settings' })
+      await waitFor(`Boolean(document.querySelector('.editing-switch')) && document.querySelector('.editing-switch').getAttribute('aria-checked') === '${enabled}'`)
+      await waitFor("Object.keys(document.querySelector('.editing-switch')).some(key => key.startsWith('__reactProps$'))")
+    }
+    console.log('PASS mobile admin settings: editing can be turned off/on repeatedly, persists between pages and gates Edit buttons; name selection prefills the current display name')
     await page('Page.navigate', { url: appUrl + '/admin/summary' })
     await waitFor("Boolean(document.querySelector('.page-heading .button.danger'))")
     await waitFor("Object.keys(document.querySelector('.page-heading .button.danger')).some(key => key.startsWith('__reactProps$'))")
@@ -161,6 +207,46 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     await waitFor("!document.querySelector('.confirm-modal')")
     assert.ok(await evaluate("Boolean(document.querySelector('.summary-table'))"), 'canceling deletion preserves the report')
     console.log('PASS mobile settings and report deletion: left-aligned forms, Settings above Logout, selected-date confirmation, disabled delete until confirmed and cancellation')
+    for (const width of [320, 390]) {
+      await page('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true })
+      for (const [prefix, headers] of [['', userHeaders], ['/admin', adminHeaders]]) {
+        const split = headers.cookie.indexOf('=')
+        await page('Network.setCookie', { name: headers.cookie.slice(0, split), value: headers.cookie.slice(split + 1), url: appUrl })
+        for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
+          const url = `${appUrl}${prefix}${path}?from=2020-01-01&to=${selectedDate}`
+          await page('Page.navigate', { url })
+          await waitFor(`location.href === ${JSON.stringify(url)} && document.readyState === 'complete' && Boolean(document.querySelector('.date-range-filter'))`)
+          const controls = await evaluate(`(() => {
+            const form = document.querySelector('.date-range-filter');
+            const rect = element => { const r = element.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, width: r.width, height: r.height }; };
+            return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
+              from: rect(form.elements.from), to: rect(form.elements.to), values: [form.elements.from.value, form.elements.to.value],
+              buttons: [...form.querySelectorAll('.filter-actions .button')].map(rect),
+              fields: [...form.querySelectorAll('input, select')].map(rect) };
+          })()`)
+          assert.equal(controls.viewport, width)
+          assert.ok(controls.pageWidth <= width + 1, `${prefix}${path} does not overflow a ${width}px phone`)
+          assert.ok(Math.abs(controls.from.top - controls.to.top) <= 1 && Math.abs(controls.from.width - controls.to.width) <= 1, 'dates form an equal-width pair')
+          assert.ok(controls.from.right <= controls.to.left, 'dates sit side by side')
+          assert.deepEqual(controls.values, ['2020-01-01', selectedDate])
+          assert.ok(controls.fields.every(field => field.left >= 0 && field.right <= width), 'date and party fields fit the screen')
+          assert.ok(controls.buttons.every(button => button.height >= 44) && Math.abs(controls.buttons[0].top - controls.buttons[1].top) <= 1, `${prefix}${path} at ${width}px: Apply/Reset are touch-sized and side by side: ${JSON.stringify(controls.buttons)}`)
+          if (width === 390 && path === '/credit-recovery') {
+            const screenshot = await page('Page.captureScreenshot', { format: 'png' })
+            await writeFile(`.next-page-check/screenshots/${prefix ? 'admin' : 'user'}-date-filters.png`, Buffer.from(screenshot.data, 'base64'))
+          }
+        }
+      }
+      const split = adminHeaders.cookie.indexOf('=')
+      await page('Network.setCookie', { name: adminHeaders.cookie.slice(0, split), value: adminHeaders.cookie.slice(split + 1), url: appUrl })
+      for (const path of ['/admin/dashboard', '/admin/summary']) {
+        await page('Page.navigate', { url: appUrl + path })
+        await waitFor(`location.href === ${JSON.stringify(appUrl + path)} && document.readyState === 'complete' && Boolean(document.querySelector('.report-date-filter'))`)
+        assert.ok(await evaluate("document.documentElement.scrollWidth <= innerWidth && document.querySelector('.report-date-filter input').getBoundingClientRect().right <= innerWidth"), 'single report-date controls fit mobile screens')
+      }
+    }
+    console.log('PASS all user/admin date filters at 320px and 390px: paired dates, retained values, full-width name filters, touch-sized actions and no page overflow')
+    return { editingModeChanges }
   } finally {
     if (send && socket?.readyState === WebSocket.OPEN) {
       await send('Browser.close').catch(() => {})

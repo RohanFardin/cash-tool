@@ -6,8 +6,10 @@ import { EntryTable } from '@/components/entry-table'
 import { AdminAddRecord } from '@/components/admin-add-record'
 import { HistoryDateFilter } from '@/components/history-date-filter'
 import { HistoryPagination } from '@/components/history-pagination'
+import { requireRole } from '@/lib/auth'
 
 export async function EntryHistory({ category, searchParams, admin = false }) {
+  const canEdit = admin && (await requireRole('superadmin')).profile.entry_editing_enabled
   const config = historyCategories[category]
   const path = admin ? '/admin' + config.path : config.path
   const data = await getEntryHistory(category, await searchParams, { admin })
@@ -22,7 +24,7 @@ export async function EntryHistory({ category, searchParams, admin = false }) {
       <div><span>{config.primary ? 'Total ' + config.primary : 'Total Amount'}</span><strong>{taka(primary)}</strong></div>
       {config.secondary && <><div><span>Total {config.secondary}</span><strong>{taka(secondary)}</strong></div><div><span>{config.balance || `${config.primary} less ${config.secondary.toLowerCase()}`}</span><strong>{taka(primary - secondary)}</strong></div></>}
     </div>
-    <EntryTable entries={data.entries} category={category} totals={data.totals} admin={admin} options={data.options} />
+    <EntryTable entries={data.entries} category={category} totals={data.totals} admin={admin} canEdit={canEdit} options={data.options} />
     <HistoryPagination path={path} data={data} />
   </div>
 }

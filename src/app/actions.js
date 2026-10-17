@@ -44,7 +44,8 @@ function stagedEntries(formData, admin = false) {
 }
 
 export async function adminEditEntryAction(_previous, formData) {
-  await requireRole('superadmin')
+  const { profile } = await requireRole('superadmin')
+  if (!profile.entry_editing_enabled) return bad('Enable entry editing in Settings before changing saved entries.')
   const source = String(formData.get('source') || '')
   const id = positiveId(formData.get('id'))
   const rawAmount = Number(formData.get('amount'))

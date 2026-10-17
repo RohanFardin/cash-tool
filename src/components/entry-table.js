@@ -38,11 +38,13 @@ function EditEntry({ entry, options, onClose }) {
   </div>
 }
 
-export function EntryTable({ entries, category = null, admin = false, options = {}, totals = null }) {
+export function EntryTable({ entries, category = null, admin = false, canEdit = false, options = {}, totals = null }) {
   const [editing, setEditing] = useState(null)
+  const showActions = admin && canEdit
+  useEffect(() => { if (!showActions) setEditing(null) }, [showActions])
   const config = category ? historyCategories[category] : null
-  const columns = ['Date & Time', ...(!config ? ['Section', 'Name', 'Entry Type', 'Phone Number', 'Notes'] : config.party ? [config.party, 'Phone Number', 'Notes'] : config.name ? [config.name] : []), ...(config?.primary ? [config.primary, config.secondary] : [config?.amount || 'Amount']), ...(admin ? ['Actions'] : [])]
-  const totalLabelColumns = columns.length - (config?.primary ? 2 : 1) - (admin ? 1 : 0)
+  const columns = ['Date & Time', ...(!config ? ['Section', 'Name', 'Entry Type', 'Phone Number', 'Notes'] : config.party ? [config.party, 'Phone Number', 'Notes'] : config.name ? [config.name] : []), ...(config?.primary ? [config.primary, config.secondary] : [config?.amount || 'Amount']), ...(showActions ? ['Actions'] : [])]
+  const totalLabelColumns = columns.length - (config?.primary ? 2 : 1) - (showActions ? 1 : 0)
   return <>
     <div className="data-table-wrap ledger-table-wrap"><table className="data-table ledger-table"><thead><tr>{columns.map((column) => <th key={column} scope="col">{column}</th>)}</tr></thead><tbody>
       {entries.map((entry) => <tr key={`${entry.source}-${entry.id}`}>
@@ -50,9 +52,9 @@ export function EntryTable({ entries, category = null, admin = false, options = 
         {!config && <><td>{historyCategories[entry.category]?.title}</td><td>{entry.party_name || '—'}</td><td>{typeLabels[entry.entry_type] || historyCategories[entry.category]?.title}</td><td>{entry.phone_number || '—'}</td><td className="text-cell">{entry.description || '—'}</td></>}
         {config?.party && <><td>{entry.party_name}</td><td>{entry.phone_number || '—'}</td><td className="text-cell">{entry.description || '—'}</td></>}{config?.name && <td>{entry.party_name}</td>}
         {config?.primary ? <><td className="number-cell">{!entry.directory_only && entry.entry_type === config.primaryType ? taka(entry.amount) : '—'}</td><td className="number-cell">{!entry.directory_only && entry.entry_type !== config.primaryType ? taka(entry.amount) : '—'}</td></> : <td className="number-cell">{entry.directory_only ? '—' : taka(entry.amount)}{entry.entry_type === 'previous_total' && <small className="history-note">Previous daily total</small>}{entry.entry_type === 'adjustment' && <small className="history-note">Adjustment</small>}</td>}
-        {admin && <td>{entry.directory_only ? '—' : <button type="button" className="button secondary table-edit" aria-label={`Edit ${historyCategories[entry.category]?.title} entry ${entry.id}`} onClick={() => setEditing(entry)}><Pencil size={15} />Edit</button>}</td>}
+        {showActions && <td>{entry.directory_only ? '—' : <button type="button" className="button secondary table-edit" aria-label={`Edit ${historyCategories[entry.category]?.title} entry ${entry.id}`} onClick={() => setEditing(entry)}><Pencil size={15} />Edit</button>}</td>}
       </tr>)}
-    </tbody>{totals && <tfoot><tr><th colSpan={totalLabelColumns} scope="row">Total for all matching entries</th><td className="number-cell">{taka(totals.primary_total)}</td>{config?.secondary && <td className="number-cell">{taka(totals.secondary_total)}</td>}{admin && <td />}</tr></tfoot>}</table>{!entries.length && <div className="empty-state"><p>No entries match this selection.</p></div>}</div>
-    {admin && editing && <EditEntry key={`${editing.source}-${editing.id}`} entry={editing} options={options} onClose={() => setEditing(null)} />}
+    </tbody>{totals && <tfoot><tr><th colSpan={totalLabelColumns} scope="row">Total for all matching entries</th><td className="number-cell">{taka(totals.primary_total)}</td>{config?.secondary && <td className="number-cell">{taka(totals.secondary_total)}</td>}{showActions && <td />}</tr></tfoot>}</table>{!entries.length && <div className="empty-state"><p>No entries match this selection.</p></div>}</div>
+    {showActions && editing && <EditEntry key={`${editing.source}-${editing.id}`} entry={editing} options={options} onClose={() => setEditing(null)} />}
   </>
 }

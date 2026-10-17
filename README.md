@@ -6,7 +6,7 @@ Read-only history is available at `/cash-sales`, `/credit-recovery`, `/supplier`
 
 ## Database setup
 
-For an existing project, apply any pending migrations **once**, in filename order, in Supabase SQL Editor. Migration `011_date_ranges_and_admin_dashboard.sql` adds inclusive date-range totals and admin dashboard batches. Migration `012_admin_delete_daily_report.sql` adds deletion of one selected submitted report and all its entries as a single transaction. For a new project, apply all migrations in filename order.
+For an existing project, apply any pending migrations **once**, in filename order, in Supabase SQL Editor. Migration `011_date_ranges_and_admin_dashboard.sql` adds inclusive date-range totals and admin dashboard batches. Migration `012_admin_delete_daily_report.sql` adds deletion of one selected submitted report and all its entries as a single transaction. Migration `013_admin_entry_edit_mode.sql` adds a per-administrator edit-mode setting, off by default, and database enforcement for saved-entry updates. For a new project, apply all migrations in filename order.
 
 History pages also work while migration 011 is pending: they use the previous totals function for all dates or one exact date, and calculate multi-day totals from all matching pages of the existing history view. Date and name filters remain active. Permission and network errors still surface as errors. Migration 011 remains required for saving admin dashboard batches.
 
@@ -16,7 +16,11 @@ Migration 005 preserves each existing cash-sales daily total as a "Previous dail
 
 All users contribute to one combined report per business date. User1 and user2 see the same entries, totals, and submission status. The entry author is retained for attribution; records are not separated by account.
 
-Administrators start at `/admin/summary`, which shows today's submitted report and has a date selector for older submitted reports. Its entries can be edited individually. The six category pages have matching `/admin/...` URLs, date filters, and Edit buttons. Administrator edits update the original record, preserve its entry time and author, record the editor and edit time, and recalculate the shared totals. Users cannot edit those records.
+Administrators start at `/admin/summary`, which shows today's submitted report and has a date selector for older submitted reports. Each selected date shows the name and sign-in username of the person who submitted that shared report, plus the submission time. Submission is attributed to the person who finalized the report, even when other users contributed entries.
+
+Entry Editing in Settings controls whether Edit buttons appear on the summary and all six `/admin/...` category pages. It is off by default and saved separately for each administrator. Turning it off hides entry editors and blocks saved-entry updates in both server actions and the database. Adding missing entries and deleting a complete report keep their existing controls. Administrator corrections preserve original entry times and authors, record the editor and edit time, and recalculate totals. Projects awaiting migration 013 can still sign in and read reports; editing remains unavailable until the migration is applied.
+
+Change User Name in Settings lets an administrator choose a user's display name. The user list, signed-in header and submission attribution use that updated name. Sign-in usernames, passwords, roles and historical submission IDs are retained.
 
 The administrator's Settings link sits above Logout and opens `/admin/settings`. Change My Password verifies the current password before updating it. Change User Password sets a new password for a selected user account; it cannot target another administrator. Both forms require matching new passwords with at least 12 characters, and Supabase applies its project password rules. Passwords are handled by Supabase Auth and are never saved in the application's accounting tables or returned in action responses.
 
@@ -26,7 +30,7 @@ Daily Summary includes Delete This Report for its selected submitted or approved
 
 History and admin-summary tables keep their column headers and rows on phones; wide tables scroll horizontally.
 
-All history pages for users and administrators have inclusive Date From / Date To filters, which also filter totals and persist when paging. Cash in Hand remains a running balance including days before the selected range. All table headings, numbers, and form fields align left. The summary totals table and daily cash table fit phone screens.
+All history pages for users and administrators have inclusive Date From / Date To filters, which also filter totals and persist when paging. On phones, the dates form an equal-width pair, name filters occupy a full row, and Apply/Reset buttons sit side by side. Summary and dashboard report-date controls use the same mobile styling. Cash in Hand includes days before the selected range. Table headings, numbers and form fields align left. The daily cash table fits phone screens. The admin summary initially shows Section and Total Amount; swiping its table reveals Records.
 
 Administrators can open `/admin/dashboard`, select today or an earlier report date, and use the same temporary entry forms as users. Save Report Entries commits the whole batch atomically. A draft or missing report becomes submitted; additions to submitted or approved reports retain their existing status and submission/approval metadata. Administrator entries are attributed to the administrator, and cash corrections carry forward to later days. Users stay locked out of submitted report entry forms.
 
@@ -48,4 +52,4 @@ Tests run all migrations against an isolated in-memory PostgreSQL database with 
 
 `test:pages` starts a temporary Next.js development server on port 4317 and a local Supabase API fixture to check the real pages, name filters, submission gating, and read-only history requests.
 
-Optionally set `CASH_TOOL_BROWSER` to the full path of an installed Chrome/Chromium executable before running `test:pages`. It verifies summary and cash-history layouts at a 390px mobile viewport, saves screenshots under `.next-page-check/screenshots/`, and exercises customer/supplier search, entry types, contact details, temporary deletion, and the submission confirmation payload. These checks use the local fixture and do not connect to the Supabase project.
+Optionally set `CASH_TOOL_BROWSER` to the full path of an installed Chrome/Chromium executable before running `test:pages`. It checks summary scrolling and cash-history layouts, then every user/admin date filter at 320px and 390px. It also exercises editing on/off across navigation, user-name selection, customer/supplier entry forms, temporary deletion and submission confirmation. Screenshots are saved under `.next-page-check/screenshots/`. These checks use the local fixture and do not connect to the Supabase project.

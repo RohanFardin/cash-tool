@@ -17,12 +17,12 @@ const today = businessDate()
 const yesterdayValue = new Date(`${today}T00:00:00Z`)
 yesterdayValue.setUTCDate(yesterdayValue.getUTCDate() - 1)
 const yesterday = yesterdayValue.toISOString().slice(0, 10)
-const profile = { id: userId, full_name: 'User', username: 'user', role: 'user' }
+const profile = { id: userId, full_name: 'User', username: 'user', role: 'user', entry_editing_enabled: false }
 const profiles = [profile, { ...profile, id: secondUserId, full_name: 'Second User', username: 'user2' }, { ...profile, id: adminId, full_name: 'Administrator', username: 'admin', role: 'superadmin' }]
 const user = { id: userId, aud: 'authenticated', role: 'authenticated', email: 'user@pharmacy.local', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {}, created_at: timestamp }
-const report = { id: 1, business_date: today, status: 'draft', cash_sales: 100, updated_at: timestamp, submitted_at: timestamp }
+const report = { id: 1, business_date: today, status: 'draft', cash_sales: 100, updated_at: timestamp, submitted_at: timestamp, submitted_by: userId }
 const previousDate = '2020-01-01'
-const previousReport = { ...report, id: 2, business_date: previousDate, status: 'submitted', cash_sales: 200, cash_in_hand: 200 }
+const previousReport = { ...report, id: 2, business_date: previousDate, status: 'submitted', cash_sales: 200, cash_in_hand: 200, submitted_by: secondUserId }
 const yesterdayReport = { ...report, id: 3, business_date: yesterday, status: 'submitted', cash_sales: 100, cash_in_hand: -50 }
 const base = { daily_report_id: 1, amount: 100, created_by: userId, created_at: timestamp }
 const datasets = {
@@ -57,6 +57,8 @@ const userBatches = []
 const partyAdditions = []
 const deletions = []
 const passwordChanges = []
+const profileUpdates = []
+const entryEdits = []
 // Synthetic credentials used only by the local Auth fixture.
 const fixtureSecret = 'sb_secret_local_test_only'
 const passwords = new Map([[adminId, 'LocalAdminOld12!'], [userId, 'LocalUserOld12!'], [secondUserId, 'LocalSecondOld12!']])
@@ -77,6 +79,20 @@ const backend = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost')
   response.setHeader('Content-Type', 'application/json')
   response.setHeader('X-Supabase-Api-Version', '2024-01-01')
+  if (url.pathname === '/rest/v1/rpc/admin_edit_entry') {
+    let body = ''
+    for await (const chunk of request) body += chunk
+    const params = JSON.parse(body)
+    const identity = JSON.parse(Buffer.from(request.headers.authorization.split(' ')[1].split('.')[1], 'base64url').toString()).sub
+    if (!profiles.some((profile) => profile.id === identity && profile.role === 'superadmin' && profile.entry_editing_enabled)) {
+      response.statusCode = 403
+      return response.end(JSON.stringify({ code: 'P0001', message: 'Enable entry editing in Settings' }))
+    }
+    entryEdits.push(params)
+    const entry = datasets.entry_history.find((row) => row.source === params.p_source && row.id === params.p_id)
+    entry.amount = params.p_amount
+    return response.end(JSON.stringify(entry.business_date))
+  }
   if (url.pathname === '/auth/v1/user') {
     const token = request.headers.authorization?.split(' ')[1]
     const identity = token ? JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub : userId
@@ -219,6 +235,21 @@ const backend = createServer(async (request, response) => {
     partyAdditions.push({ table, ...saved })
     return response.end(JSON.stringify(saved))
   }
+  if (table === 'profiles' && request.method === 'PATCH') {
+    const token = request.headers.authorization.split(' ')[1]
+    const identity = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub
+    assert.equal(profiles.find((profile) => profile.id === identity)?.role, 'superadmin')
+    let body = ''
+    for await (const chunk of request) body += chunk
+    const values = JSON.parse(body)
+    assert.ok(Object.keys(values).every((key) => ['full_name', 'entry_editing_enabled'].includes(key)), 'settings never change usernames or roles')
+    const matched = profiles.filter((profile) => [...url.searchParams].every(([field, value]) => !value.startsWith('eq.') || String(profile[field]) === value.slice(3)))
+    for (const profile of matched) {
+      Object.assign(profile, values)
+      profileUpdates.push({ id: profile.id, values })
+    }
+    return response.end(JSON.stringify(request.headers.accept?.includes('application/vnd.pgrst.object+json') ? matched[0] || null : matched))
+  }
   if (request.method !== 'GET') {
     writes.push(`${request.method} ${url.pathname}`)
     response.statusCode = 400
@@ -288,6 +319,7 @@ function headersFor(id) {
 const headers = headersFor(userId)
 const adminHeaders = headersFor(adminId)
 const htmlOnly = (body) => body.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<!--[\s\S]*?-->/g, '')
+let browserEditingChanges = []
 try {
   let ready = false
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -381,6 +413,15 @@ try {
   assert.ok(nextDay.includes('No cash sales entries today.') && nextDay.includes('No due entries today.'))
   console.log('PASS dashboard: previous days disappear from today')
   report.business_date = today
+  const adminProfile = profiles.find((profile) => profile.id === adminId)
+  for (const path of ['/summary', '/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
+    const readonly = htmlOnly(await (await fetch(`${appUrl}/admin${path}`, { headers: adminHeaders })).text())
+    assert.ok(!readonly.includes('table-edit') && !readonly.includes('>Actions<'), `${path} hides entry editing when it is off`)
+  }
+  delete adminProfile.entry_editing_enabled
+  const awaitingMigration = htmlOnly(await (await fetch(`${appUrl}/admin/settings`, { headers: adminHeaders })).text())
+  assert.ok(awaitingMigration.includes('Apply migration 013') && awaitingMigration.includes('Change My Password'), 'pending migration keeps admin signed in with editing unavailable')
+  adminProfile.entry_editing_enabled = true
   for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
     const response = await fetch(`${appUrl}/admin${path}`, { headers: adminHeaders })
     const html = htmlOnly(await response.text())
@@ -404,9 +445,11 @@ try {
   const adminToday = htmlOnly(await (await fetch(`${appUrl}/admin/summary`, { headers: adminHeaders })).text())
   assert.ok(adminToday.includes('Submitted Entries') && adminToday.includes('table-edit'))
   assert.ok(adminToday.includes('Delete This Report'))
+  assert.ok(adminToday.includes('Submitted by') && adminToday.includes('<dd>User<small>user</small>'), 'current summary identifies its submitter')
   const rawSettings = await (await fetch(`${appUrl}/admin/settings`, { headers: adminHeaders })).text()
   const settings = htmlOnly(rawSettings)
   assert.ok(settings.includes('Change My Password') && settings.includes('Change User Password'))
+  assert.ok(settings.includes('Entry Editing') && settings.includes('Change User Name'))
   assert.ok(settings.includes('name="current_password"') && settings.includes('name="confirm_password"') && settings.includes('name="user_id"'))
   const accountOptions = settings.match(/<select name="user_id"[\s\S]*?<\/select>/)?.[0]
   assert.ok(accountOptions.includes(userId) && accountOptions.includes(secondUserId) && !accountOptions.includes(adminId), 'only user accounts can be selected for resets')
@@ -418,13 +461,14 @@ try {
   assert.ok(blockedSettings.headers.get('location') === '/dashboard' || blockedSettingsBody.includes('url=/dashboard'))
   console.log('PASS admin settings: password forms, user-only choices, Settings above Logout, private credentials and role protection')
   const adminPast = htmlOnly(await (await fetch(`${appUrl}/admin/summary?date=${previousDate}`, { headers: adminHeaders })).text())
+  assert.ok(adminPast.includes('<dd>Second User<small>user2</small>'), 'a different date shows that report’s actual submitter')
   assert.ok(adminPast.includes('1 shared entries') && adminPast.includes('৳200.00'))
   const pastTables = [...adminPast.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)]
   assert.ok(!pastTables.at(-1)[1].includes('Alice'), 'date-selected summary excludes other days')
   console.log('PASS admin summary: today and date-selected submitted records')
   if (process.env.CASH_TOOL_BROWSER) {
     const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
-    await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })
+    browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
   }
   for (const actorHeaders of [headers, adminHeaders]) {
     for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
@@ -531,6 +575,7 @@ try {
   assert.deepEqual(partyAdditions, [], 'read-only page checks do not add dashboard names')
   assert.deepEqual(deletions, [], 'viewing summaries never deletes reports')
   assert.deepEqual(passwordChanges, [], 'viewing settings never changes passwords')
+  assert.deepEqual(profileUpdates, browserEditingChanges.map(value => ({ id: adminId, values: { entry_editing_enabled: value } })), 'browser writes only the explicitly tested edit-mode changes')
   const manifest = JSON.parse(await readFile(new URL('../.next-page-check/dev/server/server-reference-manifest.json', import.meta.url), 'utf8'))
   async function invokeAction(name, values, actorHeaders, path) {
     const id = Object.entries(manifest.node).find(([, action]) => action.exportedName === name)?.[0]
@@ -681,6 +726,48 @@ try {
   assert.ok(afterDelete.includes('No submitted report for this date.') && !afterDelete.includes('Delete This Report'))
   assert.ok(datasets.daily_reports.some((row) => row.id === report.id), 'deleting one date preserves the current report')
   console.log('PASS report deletion action: date/id scope, typed confirmation, permissions and the empty summary after deletion')
+  for (const [value, expected] of [['false', false], ['true', true], ['false', false]]) {
+    const result = await invokeAction('setEntryEditingAction', { enabled: value, user_id: userId }, adminHeaders, '/admin/settings')
+    assert.ok(result.body.includes(`Entry editing is ${expected ? 'on' : 'off'}.`))
+    assert.equal(adminProfile.entry_editing_enabled, expected)
+    assert.equal(profile.entry_editing_enabled, false, 'the setting always targets the signed-in admin')
+    for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
+      const html = htmlOnly(await (await fetch(`${appUrl}/admin${path}`, { headers: adminHeaders })).text())
+      assert.equal(html.includes('table-edit'), expected, `${path} follows saved edit mode`)
+    }
+  }
+  const editValues = { source: 'cash', id: '1', amount: '77' }
+  const lockedEdit = await invokeAction('adminEditEntryAction', editValues, adminHeaders, '/admin/cash-sales')
+  assert.ok(lockedEdit.body.includes('Enable entry editing in Settings'))
+  assert.equal(entryEdits.length, 0)
+  await invokeAction('setEntryEditingAction', { enabled: 'true' }, adminHeaders, '/admin/settings')
+  const allowedEdit = await invokeAction('adminEditEntryAction', editValues, adminHeaders, '/admin/cash-sales')
+  assert.ok(allowedEdit.body.includes('Entry updated.'))
+  assert.equal(entryEdits.length, 1)
+  const beforeInvalidPreferences = profileUpdates.length
+  await invokeAction('setEntryEditingAction', { enabled: 'invalid' }, adminHeaders, '/admin/settings')
+  await invokeAction('setEntryEditingAction', { enabled: 'true' }, headers, '/admin/settings')
+  assert.equal(profileUpdates.length, beforeInvalidPreferences, 'invalid settings and users never update edit mode')
+  console.log('PASS entry-editing setting: persistent on/off controls, all admin tables, server-side enforcement and user exclusion')
+  const rename = await invokeAction('renameUserAction', { user_id: userId, full_name: '  Rafiq Hasan  ', role: 'superadmin', username: 'changed' }, adminHeaders, '/admin/settings')
+  assert.ok(rename.body.includes('Rafiq Hasan saved.'))
+  assert.equal(profile.full_name, 'Rafiq Hasan')
+  assert.equal(profile.username, 'user')
+  assert.equal(profile.role, 'user')
+  report.status = 'submitted'
+  const renamedSummary = htmlOnly(await (await fetch(`${appUrl}/admin/summary`, { headers: adminHeaders })).text())
+  assert.ok(renamedSummary.includes('<dd>Rafiq Hasan<small>user</small>'), 'summary attribution follows the renamed user')
+  const renamedUsers = htmlOnly(await (await fetch(`${appUrl}/admin/users`, { headers: adminHeaders })).text())
+  const renamedDashboard = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
+  assert.ok(renamedUsers.includes('Rafiq Hasan') && renamedDashboard.includes('Rafiq Hasan'), 'user lists and the signed-in header use the new name')
+  const beforeInvalidNames = profileUpdates.length
+  for (const values of [
+    { user_id: userId, full_name: ' ' }, { user_id: userId, full_name: 'n'.repeat(151) },
+    { user_id: adminId, full_name: 'Other Admin' }, { user_id: 'not-a-user', full_name: 'Invalid' },
+  ]) await invokeAction('renameUserAction', values, adminHeaders, '/admin/settings')
+  await invokeAction('renameUserAction', { user_id: userId, full_name: 'Unauthorized' }, headers, '/admin/settings')
+  assert.equal(profileUpdates.length, beforeInvalidNames, 'invalid names and unauthorized accounts do not change profiles')
+  console.log('PASS user names: admin-only display-name changes update attribution and headers without changing login usernames or roles')
 } catch (error) {
   console.error(logs.slice(-5000))
   throw error
