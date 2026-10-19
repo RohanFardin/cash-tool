@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { readSheet } from 'read-excel-file/node'
 
 // Optional real-browser check using an installed Chromium/Chrome executable.
 // All pages and credentials come from check-pages.mjs's local fixture.
@@ -174,6 +175,62 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     assert.ok(settingsLayout.fieldAlignment.every(value => value === 'left'))
     assert.deepEqual(settingsLayout.links, ['Settings', 'Logout'])
     await waitFor("Object.keys(document.querySelector('.editing-switch')).some(key => key.startsWith('__reactProps$'))")
+    for (const width of [320, 390]) {
+      await page('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true })
+      await evaluate("document.querySelector('#download-report > button').click()")
+      await waitFor("Boolean(document.querySelector('#download-report [role=dialog] input[name=from]'))")
+      const downloadLayout = await evaluate(`(() => {
+        const dialog = document.querySelector('#download-report [role=dialog]');
+        const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, width: r.width, height: r.height }; };
+        return { width: document.documentElement.scrollWidth, from: rect(dialog.querySelector('[name=from]')), to: rect(dialog.querySelector('[name=to]')),
+          fields: [...dialog.querySelectorAll('input, button')].map(rect), focused: document.activeElement.name };
+      })()`)
+      assert.ok(downloadLayout.width <= width, 'the download dialog fits the phone screen')
+      assert.equal(downloadLayout.focused, 'from', 'download form moves focus into the dialog')
+      assert.ok(downloadLayout.fields.every(rect => rect.left >= 0 && rect.right <= width), 'download fields and actions stay inside the screen')
+      assert.ok(Math.abs(downloadLayout.from.width - downloadLayout.to.width) <= 1 && Math.abs(downloadLayout.from.top - downloadLayout.to.top) <= 1, 'download date fields form an equal-width pair')
+      assert.ok(downloadLayout.from.height >= 44 && downloadLayout.to.height >= 44)
+      const screenshot = await page('Page.captureScreenshot', { format: 'png' })
+      await writeFile(`.next-page-check/screenshots/download-report-${width}.png`, Buffer.from(screenshot.data, 'base64'))
+      await page('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
+      await waitFor("!document.querySelector('#download-report [role=dialog]')")
+      assert.equal(await evaluate("document.activeElement === document.querySelector('#download-report > button')"), true, 'canceling returns focus to Download report')
+    }
+    await mkdir('.next-page-check/downloads', { recursive: true })
+    await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: resolve('.next-page-check/downloads') })
+    await evaluate("document.querySelector('#download-report > button').click()")
+    await waitFor("Boolean(document.querySelector('#download-report [role=dialog] input[name=to]'))")
+    const downloadDate = await evaluate("document.querySelector('#download-report input[name=to]').value")
+    const downloadFile = resolve(`.next-page-check/downloads/ozi-pharma-report-${downloadDate}-to-${downloadDate}.xlsx`)
+    await rm(downloadFile, { force: true })
+    async function setDownloadDate(name, value) {
+      await evaluate(`(() => {
+        const input = document.querySelector('#download-report input[name=${name}]');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`)
+    }
+    await setDownloadDate('from', downloadDate)
+    const beforeDate = new Date(`${downloadDate}T00:00:00Z`)
+    beforeDate.setUTCDate(beforeDate.getUTCDate() - 1)
+    await setDownloadDate('to', beforeDate.toISOString().slice(0, 10))
+    await evaluate("document.querySelector('#download-report button[type=submit]').click()")
+    await waitFor("document.querySelector('#download-report [role=status]')?.textContent.includes('Date From must be on or before Date To.')")
+    await setDownloadDate('to', downloadDate)
+    await evaluate("document.querySelector('#download-report button[type=submit]').click()")
+    await waitFor("!document.querySelector('#download-report [role=dialog]') && document.querySelector('#download-report [role=status]')?.textContent.includes('downloaded')")
+    let downloaded
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try { downloaded = await readFile(downloadFile); break }
+      catch { await new Promise(done => setTimeout(done, 250)) }
+    }
+    assert.ok(downloaded, 'pressing OK saves an actual Excel file')
+    const downloadedRows = await readSheet(downloaded)
+    assert.equal(downloadedRows.length, 2)
+    assert.equal(downloadedRows[1][0].toISOString().slice(0, 10), downloadDate)
+    assert.equal(downloadedRows[1][1], 250, 'frontend download includes carried closing cash')
+    console.log('PASS mobile report download: date picker at 320px/390px, focus and cancellation, invalid range feedback, and an Excel file saved through the OK button')
     await evaluate(`(() => {
       const select = document.querySelector('#user-names select');
       select.value = select.options[1].value;
@@ -243,6 +300,23 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
         await page('Page.navigate', { url: appUrl + path })
         await waitFor(`location.href === ${JSON.stringify(appUrl + path)} && document.readyState === 'complete' && Boolean(document.querySelector('.report-date-filter'))`)
         assert.ok(await evaluate("document.documentElement.scrollWidth <= innerWidth && document.querySelector('.report-date-filter input').getBoundingClientRect().right <= innerWidth"), 'single report-date controls fit mobile screens')
+      }
+      for (const [path, headers] of [['/admin/summary', adminHeaders], ['/summary', userHeaders]]) {
+        const split = headers.cookie.indexOf('=')
+        await page('Network.setCookie', { name: headers.cookie.slice(0, split), value: headers.cookie.slice(split + 1), url: appUrl })
+        await page('Page.navigate', { url: appUrl + path })
+        await waitFor("document.querySelector('.summary-cash-balances')?.getBoundingClientRect().width > 0")
+        const cashCards = await evaluate(`(() => {
+          const cards = document.querySelector('.summary-cash-balances');
+          const totals = document.querySelector('.summary-table, .stat-grid');
+          return { labels: [...cards.querySelectorAll('span')].map(node => node.textContent),
+            amounts: [...cards.querySelectorAll('strong')].map(node => Number(node.textContent.replace(/[^0-9.-]/g, ''))),
+            beforeTotals: cards.getBoundingClientRect().bottom <= totals.getBoundingClientRect().top,
+            fits: document.documentElement.scrollWidth <= innerWidth && [...cards.querySelectorAll('strong')].every(node => node.getBoundingClientRect().right <= innerWidth) };
+        })()`)
+        assert.deepEqual(cashCards.labels, ['Yesterday’s Cash in Hand', 'Cash in Hand'])
+        assert.deepEqual(cashCards.amounts, [150, 250])
+        assert.ok(cashCards.beforeTotals && cashCards.fits, `${path} cash balances appear above totals and fit a ${width}px phone`)
       }
     }
     console.log('PASS all user/admin date filters at 320px and 390px: paired dates, retained values, full-width name filters, touch-sized actions and no page overflow')

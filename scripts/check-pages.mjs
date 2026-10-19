@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { encodeReply } from 'next/dist/compiled/react-server-dom-turbopack/client.node.js'
 import { businessDate, formatDate, taka } from '../src/lib/format.js'
+import { readSheet } from 'read-excel-file/node'
 
 // Exercise the actual Next.js pages against a local Supabase API fixture.
 // No project credentials or external Supabase requests are used.
@@ -30,6 +31,7 @@ const datasets = {
   admin_report_summary: [
     { id: 1, business_date: today, cash_sales: 100, credit_sales: 100, credit_recovery: 0, supplier_purchases: 100, supplier_payments: 0, cash_purchases: 100, overhead_cost: 100, conveyance: 100 },
     { id: 2, business_date: previousDate, cash_sales: 200, credit_sales: 0, credit_recovery: 0, supplier_purchases: 0, supplier_payments: 0, cash_purchases: 0, overhead_cost: 0, conveyance: 0 },
+    { id: 3, business_date: yesterday, cash_sales: 100, credit_sales: 0, credit_recovery: 0, supplier_purchases: 0, supplier_payments: 150, cash_purchases: 0, overhead_cost: 0, conveyance: 0 },
   ],
   customers: [{ id: 1, name: 'Alice', active: true, created_at: timestamp }, { id: 2, name: 'Bob', active: true, created_at: timestamp }, { id: 3, name: 'New Person', phone_number: '01700000000', active: true, created_at: timestamp }],
   suppliers: [{ id: 1, name: 'Medicine Company', active: true, created_at: timestamp }, { id: 2, name: 'Other Company', active: true, created_at: timestamp }, { id: 3, name: 'New Company', active: true, created_at: timestamp }],
@@ -66,6 +68,7 @@ let passwordErrorCode = null
 let cashSchemaAvailable = true
 let historySchema = 'current'
 let historyRowLimit = Infinity
+let exportRowLimit = Infinity
 function cashBalances() {
   let balance = 0
   return datasets.daily_reports.filter((row) => ['submitted', 'approved'].includes(row.status))
@@ -289,6 +292,7 @@ const backend = createServer(async (request, response) => {
   const limit = Number(url.searchParams.get('limit') || rows.length)
   rows = rows.slice(offset, offset + limit)
   if (table === 'entry_history') rows = rows.slice(0, historyRowLimit)
+  if (['daily_reports', 'admin_report_summary'].includes(table)) rows = rows.slice(0, exportRowLimit)
   if (request.headers.accept?.includes('application/vnd.pgrst.object+json')) return response.end(JSON.stringify(rows[0] || null))
   response.end(JSON.stringify(rows))
 })
@@ -401,7 +405,8 @@ try {
   report.cash_in_hand = 100
   const submitted = htmlOnly(await (await fetch(`${appUrl}/summary`, { headers })).text())
   assert.ok(submitted.includes('Submitted Summary'))
-  assert.ok(submitted.includes(taka(250)) && submitted.includes('Running balance through this report'))
+  assert.ok(submitted.includes(taka(250)) && submitted.includes('Closing balance through this report'))
+  assert.ok(submitted.includes('Yesterday’s Cash in Hand') && submitted.includes(taka(150)), 'submitted user summary includes yesterday’s closing cash')
   const locked = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
   assert.ok(!locked.includes('name="cash_sales"') && !locked.includes('name="amount"'))
   const lockedCard = locked.match(/<section class="previous-cash-card[\s\S]*?<\/section>/)?.[0]
@@ -446,10 +451,12 @@ try {
   assert.ok(adminToday.includes('Submitted Entries') && adminToday.includes('table-edit'))
   assert.ok(adminToday.includes('Delete This Report'))
   assert.ok(adminToday.includes('Submitted by') && adminToday.includes('<dd>User<small>user</small>'), 'current summary identifies its submitter')
+  assert.ok(adminToday.includes('Yesterday’s Cash in Hand') && adminToday.includes(taka(150)), 'admin summary includes yesterday’s closing cash')
   const rawSettings = await (await fetch(`${appUrl}/admin/settings`, { headers: adminHeaders })).text()
   const settings = htmlOnly(rawSettings)
   assert.ok(settings.includes('Change My Password') && settings.includes('Change User Password'))
   assert.ok(settings.includes('Entry Editing') && settings.includes('Change User Name'))
+  assert.ok(settings.includes('Download report'))
   assert.ok(settings.includes('name="current_password"') && settings.includes('name="confirm_password"') && settings.includes('name="user_id"'))
   const accountOptions = settings.match(/<select name="user_id"[\s\S]*?<\/select>/)?.[0]
   assert.ok(accountOptions.includes(userId) && accountOptions.includes(secondUserId) && !accountOptions.includes(adminId), 'only user accounts can be selected for resets')
@@ -463,9 +470,36 @@ try {
   const adminPast = htmlOnly(await (await fetch(`${appUrl}/admin/summary?date=${previousDate}`, { headers: adminHeaders })).text())
   assert.ok(adminPast.includes('<dd>Second User<small>user2</small>'), 'a different date shows that report’s actual submitter')
   assert.ok(adminPast.includes('1 shared entries') && adminPast.includes('৳200.00'))
+  assert.ok(adminPast.includes(taka(0)) && adminPast.includes('Yesterday’s Cash in Hand'), 'the first report starts with zero prior cash')
   const pastTables = [...adminPast.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)]
   assert.ok(!pastTables.at(-1)[1].includes('Alice'), 'date-selected summary excludes other days')
   console.log('PASS admin summary: today and date-selected submitted records')
+  const downloadPath = `/admin/reports/download?from=${yesterday}&to=${today}`
+  for (const actorHeaders of [headers, headersFor(secondUserId)]) {
+    const forbidden = await fetch(appUrl + downloadPath, { headers: actorHeaders })
+    assert.equal(forbidden.status, 403, 'ordinary users cannot download admin reports')
+  }
+  assert.equal((await fetch(appUrl + downloadPath, { redirect: 'manual' })).status, 401, 'downloads require a signed-in account')
+  for (const suffix of ['', `?from=${today}&to=2020-01-01`, `?from=2026-02-30&to=${today}`, `?from=${today}&to=2999-01-01`]) {
+    assert.equal((await fetch(appUrl + '/admin/reports/download' + suffix, { headers: adminHeaders })).status, 400, 'invalid export dates are rejected')
+  }
+  async function downloadRows(from, to) {
+    const response = await fetch(`${appUrl}/admin/reports/download?${new URLSearchParams({ from, to })}`, { headers: adminHeaders })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    assert.ok(response.headers.get('content-disposition').includes(`ozi-pharma-report-${from}-to-${to}.xlsx`))
+    assert.equal(response.headers.get('cache-control'), 'private, no-store')
+    return readSheet(Buffer.from(await response.arrayBuffer()))
+  }
+  const exported = await downloadRows(yesterday, today)
+  assert.equal(exported.length, 3)
+  assert.deepEqual(exported.slice(1).map((row) => row[1]), [150, 250], 'download includes balances carried from dates before the selected range')
+  assert.deepEqual(exported[1].slice(2), [100, 0, 0, 0, 150, 0, 0, 0], 'supplier payments stay separate from purchases')
+  report.status = 'draft'
+  const draftExport = await downloadRows(today, today)
+  assert.deepEqual(draftExport[1].slice(1), [150, null, null, null, null, null, null, null, null], 'draft entries are omitted while cash carries forward')
+  report.status = 'submitted'
+  console.log('PASS Excel download: admin-only, validated inclusive dates, numeric daily totals, supplier columns, carried balances and draft exclusion')
   if (process.env.CASH_TOOL_BROWSER) {
     const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
     browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
@@ -565,6 +599,16 @@ try {
   const longFooter = lastPage.match(/<tfoot>([\s\S]*?)<\/tfoot>/)?.[1]
   assert.ok(lastPage.includes('Page 21 of 21') && longFooter.includes(taka(10050)) && longFooter.includes(taka(1005)))
   assert.equal([...lastPage.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].matchAll(/<tr>/g)].length, 5)
+  const savedSummaries = datasets.admin_report_summary
+  datasets.admin_report_summary = longHistory.map((row) => ({ ...savedSummaries[1], id: row.id, business_date: row.business_date, cash_sales: 10 }))
+  exportRowLimit = 200
+  const largeExport = await downloadRows(longHistory[0].business_date, longHistory.at(-1).business_date)
+  assert.equal(largeExport.length, 1006, 'download includes every report beyond the Supabase response cap')
+  assert.equal(largeExport.at(-1)[1], 1005)
+  assert.equal(largeExport.at(-1)[2], 10)
+  datasets.admin_report_summary = savedSummaries
+  exportRowLimit = Infinity
+  console.log('PASS large Excel download: 1,005 reports across capped responses with the legacy cash-balance fallback')
   datasets.daily_reports = savedReports
   cashSchemaAvailable = true
   console.log('PASS existing database pagination: balances include reports beyond the API row limit')
