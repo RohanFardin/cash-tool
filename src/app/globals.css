@@ -138,7 +138,6 @@ input:disabled { background: #edf1ef; color: #66736f; }
 .ledger-table .text-cell { white-space: normal; min-width: 180px; max-width: 320px; }
 .history-filter { display: grid; align-items: end; gap: .85rem; min-width: 0; }
 .date-range-filter { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
-.download-date-range { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .summary-cash-balances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .summary-cash-balances .previous-cash-card { flex-wrap: wrap; min-width: 0; }
 .summary-cash-balances strong { overflow-wrap: anywhere; }
@@ -209,7 +208,6 @@ input[type="date"]::-webkit-calendar-picker-indicator { margin: 0; opacity: .65;
 
 @media (max-width: 760px) {
   .summary-cash-balances { grid-template-columns: minmax(0, 1fr); gap: .7rem; }
-  .download-date-range.history-filter { padding: 0; }
   body { padding-bottom: 70px; }
   .login-page { display: block; background: linear-gradient(180deg, var(--primary-soft), #fff 45%); }
   .login-panel { min-height: 100dvh; padding: 7rem 1.25rem 2rem; max-width: 480px; margin: auto; }

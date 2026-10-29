@@ -3,10 +3,11 @@ import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { encodeReply } from 'next/dist/compiled/react-server-dom-turbopack/client.node.js'
 import { businessDate, formatDate, taka } from '../src/lib/format.js'
-import { readSheet } from 'read-excel-file/node'
+import { createApplicationFixture, nativePostgresAvailable, startPostgresFixture } from '../tests/helpers/postgres-fixture.mjs'
+import { join } from 'node:path'
 
 // Exercise the actual Next.js pages against a local Supabase API fixture.
 // No project credentials or external Supabase requests are used.
@@ -68,7 +69,6 @@ let passwordErrorCode = null
 let cashSchemaAvailable = true
 let historySchema = 'current'
 let historyRowLimit = Infinity
-let exportRowLimit = Infinity
 function cashBalances() {
   let balance = 0
   return datasets.daily_reports.filter((row) => ['submitted', 'approved'].includes(row.status))
@@ -292,10 +292,14 @@ const backend = createServer(async (request, response) => {
   const limit = Number(url.searchParams.get('limit') || rows.length)
   rows = rows.slice(offset, offset + limit)
   if (table === 'entry_history') rows = rows.slice(0, historyRowLimit)
-  if (['daily_reports', 'admin_report_summary'].includes(table)) rows = rows.slice(0, exportRowLimit)
   if (request.headers.accept?.includes('application/vnd.pgrst.object+json')) return response.end(JSON.stringify(rows[0] || null))
   response.end(JSON.stringify(rows))
 })
+const backupFixture = nativePostgresAvailable ? await startPostgresFixture() : null
+if (backupFixture) {
+  try { await createApplicationFixture(backupFixture) }
+  catch (error) { await backupFixture.close(); throw error }
+}
 backend.listen(0, '127.0.0.1')
 await once(backend, 'listening')
 const backendUrl = `http://127.0.0.1:${backend.address().port}`
@@ -303,7 +307,7 @@ const appPort = 4317
 const appUrl = `http://localhost:${appPort}`
 const child = spawn(process.execPath, [fileURLToPath(new URL('../node_modules/next/dist/bin/next', import.meta.url)), 'dev', '--port', String(appPort)], {
   cwd: fileURLToPath(new URL('..', import.meta.url)), windowsHide: true,
-  env: { ...process.env, CASH_TOOL_PAGE_CHECK: '1', NEXT_PUBLIC_SUPABASE_URL: backendUrl, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_local_test', SUPABASE_SECRET_KEY: fixtureSecret, SUPABASE_SERVICE_ROLE_KEY: '' },
+  env: { ...process.env, CASH_TOOL_PAGE_CHECK: '1', NEXT_PUBLIC_SUPABASE_URL: backendUrl, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_local_test', SUPABASE_SECRET_KEY: fixtureSecret, SUPABASE_SERVICE_ROLE_KEY: '', SUPABASE_DB_URL: backupFixture?.databaseUrl('source') || '' },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 let logs = ''
@@ -456,10 +460,11 @@ try {
   const settings = htmlOnly(rawSettings)
   assert.ok(settings.includes('Change My Password') && settings.includes('Change User Password'))
   assert.ok(settings.includes('Entry Editing') && settings.includes('Change User Name'))
-  assert.ok(settings.includes('Download report'))
+  assert.ok(settings.includes('Download Backup'))
   assert.ok(settings.includes('name="current_password"') && settings.includes('name="confirm_password"') && settings.includes('name="user_id"'))
   const accountOptions = settings.match(/<select name="user_id"[\s\S]*?<\/select>/)?.[0]
   assert.ok(accountOptions.includes(userId) && accountOptions.includes(secondUserId) && !accountOptions.includes(adminId), 'only user accounts can be selected for resets')
+  if (backupFixture) assert.ok(!rawSettings.includes(backupFixture.databaseUrl('source')), 'database connection never reaches client HTML')
   assert.ok(!rawSettings.includes(fixtureSecret), 'server credentials never appear in settings HTML or client props')
   const settingsFooter = settings.match(/<div class="sidebar-footer">([\s\S]*?)<\/div>/)?.[1]
   assert.ok(settingsFooter.includes('/admin/settings') && settingsFooter.indexOf('Settings') < settingsFooter.indexOf('Logout'), 'Settings sits directly above Logout')
@@ -474,32 +479,33 @@ try {
   const pastTables = [...adminPast.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)]
   assert.ok(!pastTables.at(-1)[1].includes('Alice'), 'date-selected summary excludes other days')
   console.log('PASS admin summary: today and date-selected submitted records')
-  const downloadPath = `/admin/reports/download?from=${yesterday}&to=${today}`
-  for (const actorHeaders of [headers, headersFor(secondUserId)]) {
-    const forbidden = await fetch(appUrl + downloadPath, { headers: actorHeaders })
-    assert.equal(forbidden.status, 403, 'ordinary users cannot download admin reports')
-  }
-  assert.equal((await fetch(appUrl + downloadPath, { redirect: 'manual' })).status, 401, 'downloads require a signed-in account')
-  for (const suffix of ['', `?from=${today}&to=2020-01-01`, `?from=2026-02-30&to=${today}`, `?from=${today}&to=2999-01-01`]) {
-    assert.equal((await fetch(appUrl + '/admin/reports/download' + suffix, { headers: adminHeaders })).status, 400, 'invalid export dates are rejected')
-  }
-  async function downloadRows(from, to) {
-    const response = await fetch(`${appUrl}/admin/reports/download?${new URLSearchParams({ from, to })}`, { headers: adminHeaders })
+  const downloadPath = '/admin/backups/download'
+  const requestBackup = (actorHeaders, origin = appUrl) => fetch(appUrl + downloadPath, { method: 'POST', headers: { ...actorHeaders, origin } })
+  for (const actorHeaders of [headers, headersFor(secondUserId)]) assert.equal((await requestBackup(actorHeaders)).status, 403, 'ordinary users cannot download a backup')
+  assert.equal((await requestBackup({})).status, 401, 'backup requires sign-in')
+  assert.equal((await requestBackup(adminHeaders, 'https://untrusted.example')).status, 403, 'cross-origin backups are rejected')
+  assert.equal((await fetch(appUrl + downloadPath, { method: 'POST', headers: adminHeaders })).status, 403, 'backup requires an app-origin request')
+  assert.equal((await fetch(appUrl + downloadPath, { headers: adminHeaders })).status, 405, 'GET cannot start a backup')
+  if (backupFixture) {
+    const response = await requestBackup(adminHeaders)
     assert.equal(response.status, 200)
-    assert.equal(response.headers.get('content-type'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    assert.ok(response.headers.get('content-disposition').includes(`joarder-pharmacy-report-${from}-to-${to}.xlsx`))
-    assert.equal(response.headers.get('cache-control'), 'private, no-store')
-    return readSheet(Buffer.from(await response.arrayBuffer()))
+    assert.equal(response.headers.get('content-type'), 'application/octet-stream')
+    assert.ok(response.headers.get('content-disposition').includes('joarder-pharmacy-backup-') && response.headers.get('content-disposition').includes('.dump'))
+    assert.ok(response.headers.get('cache-control').includes('no-store'))
+    const bytes = Buffer.from(await response.arrayBuffer())
+    assert.equal(bytes.subarray(0, 5).toString(), 'PGDMP')
+    const downloaded = join(backupFixture.directory, 'page-download.dump')
+    await writeFile(downloaded, bytes)
+    await backupFixture.createDatabase('page_restored')
+    await backupFixture.invoke('pg_restore', ['--no-owner', '--exit-on-error', '--dbname', backupFixture.databaseUrl('page_restored'), downloaded])
+    assert.equal((await backupFixture.rows('page_restored', 'select count(*)::int as count from public.future_records'))[0].count, 1205)
+    assert.equal((await backupFixture.rows('page_restored', "select count(*)::int as count from public.daily_reports where status='draft'"))[0].count, 1)
+    assert.equal((await backupFixture.rows('page_restored', 'select count(*)::int as count from auth.users'))[0].count, 2)
+    console.log('PASS database backup: admin-only POST, origin protection, private streamed archive, all dates/drafts/accounts and 1,205 rows restored')
+  } else {
+    assert.equal((await requestBackup(adminHeaders)).status, 503)
+    console.log('PASS backup setup: missing server configuration is explicit; run backup:prepare for native round-trip checks')
   }
-  const exported = await downloadRows(yesterday, today)
-  assert.equal(exported.length, 3)
-  assert.deepEqual(exported.slice(1).map((row) => row[1]), [150, 250], 'download includes balances carried from dates before the selected range')
-  assert.deepEqual(exported[1].slice(2), [100, 0, 0, 0, 150, 0, 0, 0], 'supplier payments stay separate from purchases')
-  report.status = 'draft'
-  const draftExport = await downloadRows(today, today)
-  assert.deepEqual(draftExport[1].slice(1), [150, null, null, null, null, null, null, null, null], 'draft entries are omitted while cash carries forward')
-  report.status = 'submitted'
-  console.log('PASS Excel download: admin-only, validated inclusive dates, numeric daily totals, supplier columns, carried balances and draft exclusion')
   if (process.env.CASH_TOOL_BROWSER) {
     const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
     browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
@@ -599,16 +605,6 @@ try {
   const longFooter = lastPage.match(/<tfoot>([\s\S]*?)<\/tfoot>/)?.[1]
   assert.ok(lastPage.includes('Page 21 of 21') && longFooter.includes(taka(10050)) && longFooter.includes(taka(1005)))
   assert.equal([...lastPage.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].matchAll(/<tr>/g)].length, 5)
-  const savedSummaries = datasets.admin_report_summary
-  datasets.admin_report_summary = longHistory.map((row) => ({ ...savedSummaries[1], id: row.id, business_date: row.business_date, cash_sales: 10 }))
-  exportRowLimit = 200
-  const largeExport = await downloadRows(longHistory[0].business_date, longHistory.at(-1).business_date)
-  assert.equal(largeExport.length, 1006, 'download includes every report beyond the Supabase response cap')
-  assert.equal(largeExport.at(-1)[1], 1005)
-  assert.equal(largeExport.at(-1)[2], 10)
-  datasets.admin_report_summary = savedSummaries
-  exportRowLimit = Infinity
-  console.log('PASS large Excel download: 1,005 reports across capped responses with the legacy cash-balance fallback')
   datasets.daily_reports = savedReports
   cashSchemaAvailable = true
   console.log('PASS existing database pagination: balances include reports beyond the API row limit')

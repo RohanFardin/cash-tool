@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { readSheet } from 'read-excel-file/node'
 
 // Optional real-browser check using an installed Chromium/Chrome executable.
 // All pages and credentials come from check-pages.mjs's local fixture.
@@ -177,60 +176,35 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     await waitFor("Object.keys(document.querySelector('.editing-switch')).some(key => key.startsWith('__reactProps$'))")
     for (const width of [320, 390]) {
       await page('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: true })
-      await evaluate("document.querySelector('#download-report > button').click()")
-      await waitFor("Boolean(document.querySelector('#download-report [role=dialog] input[name=from]'))")
-      const downloadLayout = await evaluate(`(() => {
-        const dialog = document.querySelector('#download-report [role=dialog]');
-        const rect = element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, width: r.width, height: r.height }; };
-        return { width: document.documentElement.scrollWidth, from: rect(dialog.querySelector('[name=from]')), to: rect(dialog.querySelector('[name=to]')),
-          fields: [...dialog.querySelectorAll('input, button')].map(rect), focused: document.activeElement.name };
+      const layout = await evaluate(`(() => {
+        const card = document.querySelector('#download-backup');
+        const button = card.querySelector('button');
+        const rect = button.getBoundingClientRect();
+        return { pageWidth: document.documentElement.scrollWidth, left: rect.left, right: rect.right, height: rect.height, hasDates: Boolean(card.querySelector('input[type=date]')) };
       })()`)
-      assert.ok(downloadLayout.width <= width, 'the download dialog fits the phone screen')
-      assert.equal(downloadLayout.focused, 'from', 'download form moves focus into the dialog')
-      assert.ok(downloadLayout.fields.every(rect => rect.left >= 0 && rect.right <= width), 'download fields and actions stay inside the screen')
-      assert.ok(Math.abs(downloadLayout.from.width - downloadLayout.to.width) <= 1 && Math.abs(downloadLayout.from.top - downloadLayout.to.top) <= 1, 'download date fields form an equal-width pair')
-      assert.ok(downloadLayout.from.height >= 44 && downloadLayout.to.height >= 44)
+      assert.ok(layout.pageWidth <= width && layout.left >= 0 && layout.right <= width && layout.height >= 44, 'backup action fits the phone and is touch-sized')
+      assert.equal(layout.hasDates, false, 'database backup has no date-range selection')
+      await evaluate("document.querySelector('#download-backup').scrollIntoView({ block: 'center' })")
       const screenshot = await page('Page.captureScreenshot', { format: 'png' })
-      await writeFile(`.next-page-check/screenshots/download-report-${width}.png`, Buffer.from(screenshot.data, 'base64'))
-      await page('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' })
-      await waitFor("!document.querySelector('#download-report [role=dialog]')")
-      assert.equal(await evaluate("document.activeElement === document.querySelector('#download-report > button')"), true, 'canceling returns focus to Download report')
+      await writeFile(`.next-page-check/screenshots/download-backup-${width}.png`, Buffer.from(screenshot.data, 'base64'))
     }
-    await mkdir('.next-page-check/downloads', { recursive: true })
-    await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: resolve('.next-page-check/downloads') })
-    await evaluate("document.querySelector('#download-report > button').click()")
-    await waitFor("Boolean(document.querySelector('#download-report [role=dialog] input[name=to]'))")
-    const downloadDate = await evaluate("document.querySelector('#download-report input[name=to]').value")
-    const downloadFile = resolve(`.next-page-check/downloads/joarder-pharmacy-report-${downloadDate}-to-${downloadDate}.xlsx`)
-    await rm(downloadFile, { force: true })
-    async function setDownloadDate(name, value) {
-      await evaluate(`(() => {
-        const input = document.querySelector('#download-report input[name=${name}]');
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      })()`)
+    if (!await evaluate("document.querySelector('#download-backup button').disabled")) {
+      const downloadDirectory = '.next-page-check/downloads'
+      await mkdir(downloadDirectory, { recursive: true })
+      const before = new Set(await readdir(downloadDirectory))
+      await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: resolve(downloadDirectory) })
+      await evaluate("document.querySelector('#download-backup button').click()")
+      await waitFor("document.querySelector('#download-backup [role=status]')?.textContent.includes('downloaded')")
+      let downloaded
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const file = (await readdir(downloadDirectory)).find(name => !before.has(name) && name.startsWith('joarder-pharmacy-backup-') && name.endsWith('.dump'))
+        if (file) { downloaded = await readFile(resolve(downloadDirectory, file)); break }
+        await new Promise(done => setTimeout(done, 250))
+      }
+      assert.ok(downloaded, 'Download Backup saves a file')
+      assert.equal(downloaded.subarray(0, 5).toString(), 'PGDMP', 'browser saves a real PostgreSQL archive')
+      console.log('PASS mobile backup: one-click native archive download, no date filter, 320px/390px layout and success feedback')
     }
-    await setDownloadDate('from', downloadDate)
-    const beforeDate = new Date(`${downloadDate}T00:00:00Z`)
-    beforeDate.setUTCDate(beforeDate.getUTCDate() - 1)
-    await setDownloadDate('to', beforeDate.toISOString().slice(0, 10))
-    await evaluate("document.querySelector('#download-report button[type=submit]').click()")
-    await waitFor("document.querySelector('#download-report [role=status]')?.textContent.includes('Date From must be on or before Date To.')")
-    await setDownloadDate('to', downloadDate)
-    await evaluate("document.querySelector('#download-report button[type=submit]').click()")
-    await waitFor("!document.querySelector('#download-report [role=dialog]') && document.querySelector('#download-report [role=status]')?.textContent.includes('downloaded')")
-    let downloaded
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      try { downloaded = await readFile(downloadFile); break }
-      catch { await new Promise(done => setTimeout(done, 250)) }
-    }
-    assert.ok(downloaded, 'pressing OK saves an actual Excel file')
-    const downloadedRows = await readSheet(downloaded)
-    assert.equal(downloadedRows.length, 2)
-    assert.equal(downloadedRows[1][0].toISOString().slice(0, 10), downloadDate)
-    assert.equal(downloadedRows[1][1], 250, 'frontend download includes carried closing cash')
-    console.log('PASS mobile report download: date picker at 320px/390px, focus and cancellation, invalid range feedback, and an Excel file saved through the OK button')
     await evaluate(`(() => {
       const select = document.querySelector('#user-names select');
       select.value = select.options[1].value;
