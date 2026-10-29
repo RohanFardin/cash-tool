@@ -487,7 +487,7 @@ try {
     const response = await fetch(`${appUrl}/admin/reports/download?${new URLSearchParams({ from, to })}`, { headers: adminHeaders })
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('content-type'), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    assert.ok(response.headers.get('content-disposition').includes(`ozi-pharma-report-${from}-to-${to}.xlsx`))
+    assert.ok(response.headers.get('content-disposition').includes(`joarder-pharmacy-report-${from}-to-${to}.xlsx`))
     assert.equal(response.headers.get('cache-control'), 'private, no-store')
     return readSheet(Buffer.from(await response.arrayBuffer()))
   }

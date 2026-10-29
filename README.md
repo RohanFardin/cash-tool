@@ -1,4 +1,4 @@
-# Ozi Pharma
+# Joarder Pharmacy
 
 Daily entry happens on `/dashboard`. New amounts are held temporarily in the browser, where users can review and delete them. Submitting saves the full batch atomically, closes the forms, and unlocks `/summary`. The next dashboard day starts at midnight in `Asia/Dhaka`; earlier submitted entries remain in history.
 

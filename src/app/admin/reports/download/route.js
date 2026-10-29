@@ -21,7 +21,7 @@ export async function GET(request) {
     const buffer = await createReportWorkbook(data)
     return new Response(new Uint8Array(buffer), { headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="ozi-pharma-report-${range.from}-to-${range.to}.xlsx"`,
+      'Content-Disposition': `attachment; filename="joarder-pharmacy-report-${range.from}-to-${range.to}.xlsx"`,
       'Cache-Control': 'private, no-store',
     } })
   } catch (error) {

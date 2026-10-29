@@ -52,7 +52,7 @@ test('missing submitted totals fail instead of producing an incomplete spreadshe
 
 test('the exported file opens as Excel with typed dates, numeric amounts and all requested categories', async () => {
   const buffer = await createReportWorkbook(data)
-  const rows = await readSheet(buffer, { sheet: 'Ozi Pharma Daily Reports' })
+  const rows = await readSheet(buffer, { sheet: 'Joarder Pharmacy Daily Reports' })
   assert.deepEqual(rows[0], ['Date', 'Cash in Hand', 'Cash Sales', 'Cash Due', 'Cash Recovery', 'Supplier Purchases', 'Supplier Payments', 'Local Supplier', 'Overhead Cost', 'Conveyance'])
   assert.equal(rows.length, 5)
   assert.deepEqual(rows[1], [new Date('2024-02-28T00:00:00Z'), 10.3, 10.2, 30.4, 2.5, 50, 4, 3, 5, 0.5])

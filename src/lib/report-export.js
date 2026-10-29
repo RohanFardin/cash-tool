@@ -40,10 +40,10 @@ export function reportExportRows({ from, to, reports, summaries, openingCashInHa
 export async function createReportWorkbook(data) {
   const rows = reportExportRows(data)
   return writeExcelFile(rows, {
-    sheet: 'Ozi Pharma Daily Reports', stickyRowsCount: 1, stickyColumnsCount: 1,
+    sheet: 'Joarder Pharmacy Daily Reports', stickyRowsCount: 1, stickyColumnsCount: 1,
     columns: columns.map(([header, key, width]) => ({
       width,
-      header: { value: header, fontWeight: 'bold', backgroundColor: '#0B6B57', textColor: '#FFFFFF', align: 'left' },
+      header: { value: header, fontWeight: 'bold', backgroundColor: '#0D8045', textColor: '#FFFFFF', align: 'left' },
       cell: (row) => ({
         value: row[key], type: key === 'date' ? Date : Number, align: 'left',
         format: key === 'date' ? 'dd mmm yyyy' : '#,##0.00;[Red]-#,##0.00',

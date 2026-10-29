@@ -46,7 +46,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
       if (method === 'Page.navigate') {
         // Streamed Next.js content can exist inside a hidden loading segment.
         // Wait for the page to become visible before measuring any controls.
-        await waitFor(`location.href === ${JSON.stringify(params.url)} && document.readyState === 'complete' && getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() === '#0b6b57' && document.querySelector('.app-content .page-stack')?.getBoundingClientRect().width > 0`)
+        await waitFor(`location.href === ${JSON.stringify(params.url)} && document.readyState === 'complete' && getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() === '#0d8045' && document.querySelector('.app-content .page-stack')?.getBoundingClientRect().width > 0`)
       }
       return result
     }
@@ -201,7 +201,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     await evaluate("document.querySelector('#download-report > button').click()")
     await waitFor("Boolean(document.querySelector('#download-report [role=dialog] input[name=to]'))")
     const downloadDate = await evaluate("document.querySelector('#download-report input[name=to]').value")
-    const downloadFile = resolve(`.next-page-check/downloads/ozi-pharma-report-${downloadDate}-to-${downloadDate}.xlsx`)
+    const downloadFile = resolve(`.next-page-check/downloads/joarder-pharmacy-report-${downloadDate}-to-${downloadDate}.xlsx`)
     await rm(downloadFile, { force: true })
     async function setDownloadDate(name, value) {
       await evaluate(`(() => {
