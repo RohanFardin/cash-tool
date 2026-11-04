@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { businessDate } from '../src/lib/format.js'
 
 // Optional real-browser check using an installed Chromium/Chrome executable.
 // All pages and credentials come from check-pages.mjs's local fixture.
@@ -65,6 +66,9 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     await page('Page.enable')
     await page('Runtime.enable')
     await page('Network.enable')
+    // The reused profile keeps localStorage. An activity time left by an older
+    // run would otherwise sign out the first page as idle.
+    await page('Storage.clearDataForOrigin', { origin: new URL(appUrl).origin, storageTypes: 'local_storage' })
     await page('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await mkdir('.next-page-check/screenshots', { recursive: true })
     for (const [path, headers, selector, name] of [
@@ -294,6 +298,48 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
       }
     }
     console.log('PASS all user/admin date filters at 320px and 390px: paired dates, retained values, full-width name filters, touch-sized actions and no page overflow')
+    await page('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: true })
+    const adminSplit = adminHeaders.cookie.indexOf('=')
+    await page('Network.setCookie', { name: adminHeaders.cookie.slice(0, adminSplit), value: adminHeaders.cookie.slice(adminSplit + 1), url: appUrl })
+    await page('Page.navigate', { url: appUrl + '/admin/supplier' })
+    const openPurchasePayment = "[...document.querySelectorAll('.page-heading button')].find(button => button.textContent.includes('Purchase & Payment'))"
+    await waitFor(`Object.keys(${openPurchasePayment} || {}).some(key => key.startsWith('__reactProps$'))`)
+    await evaluate(`${openPurchasePayment}.click()`)
+    await waitFor("Boolean(document.querySelector('.modal select[name=supplier_id]'))")
+    const purchaseForm = await evaluate(`(() => {
+      const modal = document.querySelector('.modal');
+      const rect = element => { const r = element.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right }; };
+      return { title: modal.querySelector('h2').textContent, date: modal.querySelector('input[name=business_date]').value,
+        companies: [...modal.querySelectorAll('select[name=supplier_id] option')].map(option => option.textContent),
+        modal: rect(modal), purchase: rect(modal.querySelector('input[name=purchase]')), payment: rect(modal.querySelector('input[name=payment]')),
+        pageWidth: document.documentElement.scrollWidth };
+    })()`)
+    assert.equal(purchaseForm.title, 'Purchase & Payment')
+    assert.equal(purchaseForm.date, businessDate(), 'the date starts as today')
+    assert.ok(purchaseForm.companies.includes('Medicine Company') && purchaseForm.companies.includes('Other Company'))
+    assert.ok(Math.abs(purchaseForm.purchase.top - purchaseForm.payment.top) <= 1 && purchaseForm.purchase.right <= purchaseForm.payment.left, 'purchase and payment sit side by side')
+    assert.ok(purchaseForm.modal.left >= 0 && purchaseForm.modal.right <= 320 && purchaseForm.payment.right <= purchaseForm.modal.right && purchaseForm.pageWidth <= 321, 'the form fits a 320px phone')
+    // Typing a company that already exists selects it instead of adding a duplicate.
+    await evaluate("document.querySelector('.company-add-row input').focus()")
+    await page('Input.insertText', { text: 'medicine company' })
+    await waitFor("!document.querySelector('.company-add-row button').disabled")
+    await evaluate("document.querySelector('.company-add-row button').click()")
+    await waitFor("document.querySelector('.modal select[name=supplier_id]').value === '1' && document.querySelector('.company-add-row input').value === ''")
+    const purchaseScreenshot = await page('Page.captureScreenshot', { format: 'png' })
+    await writeFile('.next-page-check/screenshots/admin-purchase-payment.png', Buffer.from(purchaseScreenshot.data, 'base64'))
+    await evaluate("document.querySelector('.modal .button.ghost').click()")
+    await waitFor("!document.querySelector('.modal')")
+    console.log('PASS mobile purchase & payment: today’s date, company list, existing-name selection and side-by-side amounts at 320px')
+
+    const userSplit = userHeaders.cookie.indexOf('=')
+    await page('Network.setCookie', { name: userHeaders.cookie.slice(0, userSplit), value: userHeaders.cookie.slice(userSplit + 1), url: appUrl })
+    await page('Page.navigate', { url: appUrl + '/dashboard' })
+    await waitFor("Number(localStorage.getItem('cash-tool:last-activity')) > Date.now() - 60000")
+    await evaluate("localStorage.setItem('cash-tool:last-activity', String(Date.now() - 61 * 60 * 1000))")
+    await send('Page.navigate', { url: appUrl + '/dashboard' }, sessionId)
+    await waitFor("location.pathname === '/login' && Boolean(document.querySelector('input[name=username]'))")
+    assert.equal(await evaluate("localStorage.getItem('cash-tool:last-activity')"), null, 'signing in again starts a fresh idle period')
+    console.log('PASS idle sign-out: pages record activity and a session idle for over an hour returns to sign-in')
     return { editingModeChanges }
   } finally {
     if (send && socket?.readyState === WebSocket.OPEN) {

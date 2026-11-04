@@ -1,12 +1,14 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useEffect } from 'react'
 import { LockKeyhole, UserRound } from 'lucide-react'
 import { loginAction } from '@/app/actions'
 import { ActionMessage, SubmitButton } from '@/components/action-ui'
+import { clearIdleActivity } from '@/components/idle-logout'
 
 export function LoginForm() {
   const [state, action] = useActionState(loginAction, null)
+  useEffect(() => { clearIdleActivity() }, [])
   return (
     <form action={action} className="auth-form">
       <label><span>Username</span><div className="input-icon"><UserRound size={19} /><input name="username" autoComplete="username" autoCapitalize="none" required placeholder="Enter username" /></div></label>

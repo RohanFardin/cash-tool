@@ -4,6 +4,7 @@ import { historyCategories } from '@/lib/history'
 import { businessDate, taka } from '@/lib/format'
 import { EntryTable } from '@/components/entry-table'
 import { AdminAddRecord } from '@/components/admin-add-record'
+import { PurchasePayment } from '@/components/purchase-payment'
 import { HistoryDateFilter } from '@/components/history-date-filter'
 import { HistoryPagination } from '@/components/history-pagination'
 import { requireRole } from '@/lib/auth'
@@ -16,7 +17,7 @@ export async function EntryHistory({ category, searchParams, admin = false }) {
   const primary = Number(data.totals.primary_total)
   const secondary = Number(data.totals.secondary_total)
   return <div className="page-stack history-page">
-    <header className="page-heading"><div><p className="eyebrow">{admin ? 'Administration' : 'History'}</p><h1>{config.title}</h1><p>Shared records from all users. Dates and times are shown in Bangladesh time.</p></div>{admin && config.add ? <AdminAddRecord category={category} path={path} date={data.date || businessDate()} /> : <Link className="button secondary" href={admin ? '/admin/summary' : '/dashboard'}>{admin ? 'Daily Summary' : "Today's Dashboard"}</Link>}</header>
+    <header className="page-heading"><div><p className="eyebrow">{admin ? 'Administration' : 'History'}</p><h1>{config.title}</h1><p>Shared records from all users. Dates and times are shown in Bangladesh time.</p></div>{admin && category === 'supplier' ? <PurchasePayment suppliers={data.options.suppliers || []} path={path} date={businessDate()} /> : admin && config.add ? <AdminAddRecord category={category} path={path} date={data.date || businessDate()} /> :<Link className="button secondary" href={admin ? '/admin/summary' : '/dashboard'}>{admin ? 'Daily Summary' : "Today's Dashboard"}</Link>}</header>
     <HistoryDateFilter path={path} data={data} partyLabel={config.party} partyTable={config.table} parties={data.parties} />
     {data.rangeError && <p className="notice error" role="alert">{data.rangeError}</p>}
     <div className="history-totals card" aria-label="Totals for all matching entries">

@@ -163,6 +163,33 @@ export async function adminAddHistoryRecordAction(_previous, formData) {
   }
 }
 
+export async function adminPurchasePaymentAction(_previous, formData) {
+  await requireRole('superadmin')
+  const supplierId = positiveId(formData.get('supplier_id'))
+  if (!supplierId) return bad('Select a company.')
+  const date = validHistoryDate(formData.get('business_date'))
+  if (!date || date > businessDate()) return bad('Select today or an earlier date.')
+  const rawPurchase = String(formData.get('purchase') || '').trim()
+  const rawPayment = String(formData.get('payment') || '').trim()
+  const purchase = rawPurchase ? amount(rawPurchase) : null
+  const payment = rawPayment ? amount(rawPayment) : null
+  if ((rawPurchase && purchase === null) || (rawPayment && payment === null)) return bad('Enter amounts greater than zero.')
+  if (purchase === null && payment === null) return bad('Enter a purchase or payment amount.')
+  try {
+    const supabase = await createClient()
+    const { error } = await supabase.rpc('admin_add_purchase_payment', {
+      p_supplier_id: supplierId, p_business_date: date, p_purchase: purchase, p_payment: payment,
+    })
+    if (error?.code === 'PGRST202') return bad('Purchase & Payment is not available yet. Apply the latest database migration.')
+    if (error) throw error
+    refreshAccountingPages()
+    return { ...ok('Purchase & payment saved.'), businessDate: date }
+  } catch (error) {
+    console.error('adminPurchasePaymentAction', { code: error.code, message: error.message })
+    return bad('Unable to save. Check the company and amounts, then try again.')
+  }
+}
+
 export async function submitReportAction(_previous, formData) {
   await requireRole('user')
   if (formData.get('confirm') !== 'yes') return bad('Please confirm report submission.')

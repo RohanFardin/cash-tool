@@ -753,3 +753,58 @@ test('failed report deletion rolls back all child deletions', async () => {
   }
   assert.equal(await total(), 100)
 })
+
+test('purchase & payment entries change the company due and history but never cash in hand or reports', async () => {
+  await cash(1000)
+  await supplier('payment', 100)
+  await submit()
+  await actor(admin)
+  const reportCount = (await db.query('select count(*)::int as count from public.daily_reports')).rows[0].count
+  const balance = async () => Number((await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [todayId])).rows[0].cash_in_hand)
+  const due = async () => Number((await db.query('select current_due from public.supplier_balances where id=$1', [supplierId])).rows[0].current_due)
+  const balanceBefore = await balance()
+  const dueBefore = await due()
+  const saved = await db.query('select public.admin_add_purchase_payment($1,public.current_business_date()-3,50000,20000) as count', [supplierId])
+  assert.equal(saved.rows[0].count, 2)
+  assert.equal((await db.query('select public.admin_add_purchase_payment($1,public.current_business_date(),null,75) as count', [supplierId])).rows[0].count, 1)
+  assert.equal((await db.query('select count(*)::int as count from public.daily_reports')).rows[0].count, reportCount, 'no report is created for any date')
+  assert.equal(Number((await db.query('select cash_in_hand from public.daily_reports where id=$1', [todayId])).rows[0].cash_in_hand), 900)
+  assert.equal(await balance(), balanceBefore)
+  assert.equal(await due(), dueBefore + 50000 - 20000 - 75)
+  const summary = (await db.query('select supplier_purchases, supplier_payments from public.admin_report_summary where id=$1', [todayId])).rows[0]
+  assert.deepEqual([Number(summary.supplier_purchases), Number(summary.supplier_payments)], [0, 100], 'the daily report keeps only its own supplier entries')
+
+  const history = (await db.query("select * from public.entry_history where source='supplier' and daily_report_id is null and business_date=public.current_business_date()-3 order by entry_type desc")).rows
+  assert.deepEqual(history.map((row) => [row.entry_type, Number(row.amount), row.party_id, row.created_by]), [['purchase', 50000, supplierId, admin], ['payment', 20000, supplierId, admin]])
+  const totals = (await db.query("select * from public.entry_history_totals('supplier',$1,null,public.current_business_date()-3,public.current_business_date()-3)", [supplierId])).rows[0]
+  assert.deepEqual([Number(totals.entry_count), Number(totals.primary_total), Number(totals.secondary_total)], [2, 50000, 20000])
+
+  const result = await db.query("select public.admin_edit_entry('supplier',$1,25000,$2,'payment') as report_date", [history[1].id, supplierId])
+  assert.equal(result.rows[0].report_date, null)
+  assert.equal(Number((await db.query('select amount from public.supplier_ledger_entries where id=$1', [history[1].id])).rows[0].amount), 25000)
+  assert.equal(await balance(), balanceBefore, 'corrections do not change cash in hand')
+
+  await db.query('select public.admin_delete_daily_report($1,public.current_business_date())', [todayId])
+  assert.equal((await db.query('select count(*)::int as count from public.supplier_ledger_entries where daily_report_id is null')).rows[0].count, 3, 'deleting a daily report keeps purchase & payment entries')
+})
+
+test('only administrators can record purchase & payment entries', async () => {
+  await rejectsQuery('select public.admin_add_purchase_payment($1,public.current_business_date(),100,null)', [supplierId], /Administrator access required/)
+  await rejectsQuery("insert into public.supplier_ledger_entries (supplier_id,business_date,entry_type,amount,created_by,updated_by) values ($1,public.current_business_date(),'payment',100,$2,$2)", [supplierId, operator], /Administrator access required/)
+})
+
+test('purchase & payment rejects missing or invalid amounts, future dates and unknown companies', async () => {
+  await actor(admin)
+  for (const [query, params] of [
+    ['select public.admin_add_purchase_payment($1,public.current_business_date())', [supplierId]],
+    ['select public.admin_add_purchase_payment($1,public.current_business_date(),0,null)', [supplierId]],
+    ['select public.admin_add_purchase_payment($1,public.current_business_date(),100,-5)', [supplierId]],
+    ["select public.admin_add_purchase_payment($1,public.current_business_date(),'NaN',null)", [supplierId]],
+    ['select public.admin_add_purchase_payment($1,public.current_business_date()+1,100,null)', [supplierId]],
+    ['select public.admin_add_purchase_payment($1,null,100,null)', [supplierId]],
+    ['select public.admin_add_purchase_payment(-1,public.current_business_date(),100,null)', []],
+  ]) await rejectsQuery(query, params)
+  assert.equal((await db.query('select count(*)::int as count from public.supplier_ledger_entries where daily_report_id is null')).rows[0].count, 0, 'a rejected save stores nothing')
+  const reportEntry = (await supplier('purchase', 10)).rows[0]
+  await rejectsQuery('update public.supplier_ledger_entries set business_date=public.current_business_date() where id=$1', [reportEntry.id], /check constraint/)
+})

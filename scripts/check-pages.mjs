@@ -55,6 +55,8 @@ const datasets = {
 }
 const writes = []
 const additions = []
+const purchasePayments = []
+const logouts = []
 const adminBatches = []
 const userBatches = []
 const partyAdditions = []
@@ -95,6 +97,12 @@ const backend = createServer(async (request, response) => {
     const entry = datasets.entry_history.find((row) => row.source === params.p_source && row.id === params.p_id)
     entry.amount = params.p_amount
     return response.end(JSON.stringify(entry.business_date))
+  }
+  if (url.pathname === '/auth/v1/logout' && request.method === 'POST') {
+    const token = request.headers.authorization?.split(' ')[1]
+    logouts.push(token ? JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub : null)
+    response.statusCode = 204
+    return response.end()
   }
   if (url.pathname === '/auth/v1/user') {
     const token = request.headers.authorization?.split(' ')[1]
@@ -201,6 +209,20 @@ const backend = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk
     userBatches.push(JSON.parse(body))
     return response.end(JSON.stringify(report.id))
+  }
+  if (url.pathname === '/rest/v1/rpc/admin_add_purchase_payment') {
+    let body = ''
+    for await (const chunk of request) body += chunk
+    const params = JSON.parse(body)
+    purchasePayments.push(params)
+    const company = datasets.suppliers.find((row) => row.id === params.p_supplier_id)
+    for (const [type, amount] of [['purchase', params.p_purchase], ['payment', params.p_payment]]) {
+      if (amount !== null) datasets.entry_history.push({
+        ...base, id: 3000 + datasets.entry_history.length, source: 'supplier', category: 'supplier', daily_report_id: null,
+        party_id: company.id, party_name: company.name, entry_type: type, amount, business_date: params.p_business_date, created_by: adminId,
+      })
+    }
+    return response.end(JSON.stringify(Number(params.p_purchase !== null) + Number(params.p_payment !== null)))
   }
   if (url.pathname === '/rest/v1/rpc/admin_add_history_record') {
     let body = ''
@@ -438,7 +460,7 @@ try {
     assert.ok(html.includes('table-edit') && html.includes('Actions'), `/admin${path} has row editing`)
     assert.ok(html.includes('name="from"') && html.includes('name="to"'), `/admin${path} has a date range filter`)
     if (path === '/cash-sales') assert.ok(html.includes('Cash in Hand') && html.includes('Individual Cash Entries'))
-    const additions = { '/credit-recovery': ['Add Person', 'New Person'], '/supplier': ['Add Supplier Name', 'New Company'], '/overhead-cost': ['Add Overhead', 'Cash Drawn'] }
+    const additions = { '/credit-recovery': ['Add Person', 'New Person'], '/supplier': ['Purchase &amp; Payment', 'New Company'], '/overhead-cost': ['Add Overhead', 'Cash Drawn'] }
     if (additions[path]) {
       const [button, name] = additions[path]
       const heading = html.match(/<header class="page-heading">([\s\S]*?)<\/header>/)?.[1]
@@ -509,7 +531,8 @@ try {
   if (process.env.CASH_TOOL_BROWSER) {
     const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
     browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
-  }
+    assert.deepEqual(logouts, [userId], 'only the idle check signs out, using the user session')
+  } else assert.deepEqual(logouts, [], 'page checks never sign out')
   for (const actorHeaders of [headers, adminHeaders]) {
     for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
       const prefix = actorHeaders === adminHeaders ? '/admin' : ''
@@ -610,6 +633,7 @@ try {
   console.log('PASS existing database pagination: balances include reports beyond the API row limit')
   assert.deepEqual(writes, [], 'history GET requests do not mutate data')
   assert.deepEqual(additions, [], 'read-only page checks do not add records')
+  assert.deepEqual(purchasePayments, [], 'read-only page checks do not save purchase & payment entries')
   assert.deepEqual(adminBatches, [], 'read-only page checks do not save batches')
   assert.deepEqual(userBatches, [], 'read-only page checks do not submit reports')
   assert.deepEqual(partyAdditions, [], 'read-only page checks do not add dashboard names')
@@ -646,7 +670,7 @@ try {
   }
   for (const values of [
     { category: 'credit', name: 'Added Person', phone_number: '01900000000', business_date: previousDate },
-    { category: 'supplier', name: 'Added Company', entry_type: 'purchase', amount: '42', business_date: previousDate },
+    { category: 'credit', name: 'Added Due', entry_type: 'credit_sale', amount: '42', business_date: previousDate },
     { category: 'overhead', name: 'Owner Cash Drawn', business_date: today },
   ]) {
     const result = await submitAddition(values)
@@ -658,14 +682,14 @@ try {
   assert.equal(additions[1].p_amount, 42)
   const savedPerson = htmlOnly(await (await fetch(`${appUrl}/admin/credit-recovery`, { headers: adminHeaders })).text())
   assert.ok(savedPerson.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].includes('Added Person'))
-  const savedSupplier = htmlOnly(await (await fetch(`${appUrl}/admin/supplier?date=${previousDate}`, { headers: adminHeaders })).text())
-  assert.ok(savedSupplier.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].includes('Added Company') && savedSupplier.includes(taka(42)))
+  const savedDue = htmlOnly(await (await fetch(`${appUrl}/admin/credit-recovery?date=${previousDate}`, { headers: adminHeaders })).text())
+  assert.ok(savedDue.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].includes('Added Due') && savedDue.includes(taka(42)))
   const savedOverhead = htmlOnly(await (await fetch(`${appUrl}/admin/overhead-cost`, { headers: adminHeaders })).text())
   assert.ok(savedOverhead.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].includes('Owner Cash Drawn'))
   const duplicate = await submitAddition({ category: 'credit', name: 'Added Person' })
   assert.ok(duplicate.body.includes('That name already exists.'))
   const beforeInvalid = additions.length
-  const invalid = await submitAddition({ category: 'supplier', name: 'Invalid Amount', entry_type: 'purchase', amount: '-1' })
+  const invalid = await submitAddition({ category: 'credit', name: 'Invalid Amount', entry_type: 'credit_sale', amount: '-1' })
   assert.ok(invalid.body.includes('Enter an amount greater than zero'))
   const missingType = await submitAddition({ category: 'credit', name: 'Missing Type', amount: '10' })
   assert.ok(missingType.body.includes('Select an entry type for the amount.'))
@@ -674,6 +698,30 @@ try {
   assert.equal(additions.length, beforeInvalid, 'invalid and user submissions never reach the write RPC')
   assert.deepEqual(writes, [], 'admin additions use only the intended transactional RPC')
   console.log('PASS admin add forms: real server actions save names and selected-date amounts, reject duplicates, and enforce permissions')
+  async function savePurchasePayment(values, actorHeaders = adminHeaders) {
+    return invokeAction('adminPurchasePaymentAction', values, actorHeaders, '/admin/supplier')
+  }
+  const purchasePayment = await savePurchasePayment({ supplier_id: '2', business_date: previousDate, purchase: '5000', payment: '1500.5' })
+  assert.ok(purchasePayment.body.includes('Purchase & payment saved.'))
+  assert.deepEqual(purchasePayments[0], { p_supplier_id: 2, p_business_date: previousDate, p_purchase: 5000, p_payment: 1500.5 })
+  const paymentOnly = await savePurchasePayment({ supplier_id: '1', business_date: today, purchase: '', payment: '75' })
+  assert.ok(paymentOnly.body.includes('payment saved.'))
+  assert.deepEqual(purchasePayments[1], { p_supplier_id: 1, p_business_date: today, p_purchase: null, p_payment: 75 })
+  const accountHistory = htmlOnly(await (await fetch(`${appUrl}/admin/supplier?date=${previousDate}`, { headers: adminHeaders })).text())
+  const accountRows = accountHistory.match(/<tbody>([\s\S]*?)<\/tbody>/)[1]
+  assert.ok(accountRows.includes('Other Company') && accountRows.includes(taka(5000)) && accountRows.includes(taka(1500.5)))
+  assert.ok(accountRows.includes('Purchase &amp; Payment · not in Cash in Hand') && accountRows.includes(`Date: ${formatDate(previousDate)}`), 'purchase & payment rows are labelled and show their own date')
+  const beforeInvalidPayment = purchasePayments.length
+  for (const [values, message] of [
+    [{ supplier_id: '1', business_date: today }, 'Enter a purchase or payment amount.'],
+    [{ supplier_id: '1', business_date: today, purchase: '-5' }, 'Enter amounts greater than zero.'],
+    [{ supplier_id: '1', business_date: '2999-01-01', payment: '5' }, 'Select today or an earlier date.'],
+    [{ supplier_id: '', business_date: today, payment: '5' }, 'Select a company.'],
+  ]) assert.ok((await savePurchasePayment(values)).body.includes(message), message)
+  const forbiddenPayment = await savePurchasePayment({ supplier_id: '1', business_date: today, payment: '5' }, headers)
+  assert.ok(forbiddenPayment.response.headers.get('x-action-redirect')?.startsWith('/dashboard') || forbiddenPayment.body.includes('/dashboard'))
+  assert.equal(purchasePayments.length, beforeInvalidPayment, 'invalid and user submissions never reach the purchase & payment RPC')
+  console.log('PASS purchase & payment: admin saves purchase and payment on a chosen date, rows are labelled, invalid input and users are rejected')
   for (const [name, kind, table, actorHeaders, actorId, path] of [
     ['addCustomerAction', 'customer', 'customers', headers, userId, '/dashboard'],
     ['addSupplierAction', 'supplier', 'suppliers', adminHeaders, adminId, '/admin/dashboard'],
