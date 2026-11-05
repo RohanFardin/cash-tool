@@ -128,7 +128,7 @@ function CashInHandCalculator({ totals, openingAmount, storedAmount, locked }) {
   useEffect(() => { setPreview(null) }, [calculated])
   const displayed = locked ? Number(storedAmount ?? calculated) : preview
   const tone = displayed > 0 ? 'positive' : displayed < 0 ? 'negative' : 'neutral'
-  return <div className="cash-calculator">{displayed !== null && <div className={`cash-result ${tone}`}><span>{locked ? 'Submitted Cash in Hand' : admin ? 'Report Cash in Hand' : "Today's Cash in Hand"}</span><strong>{taka(displayed)}</strong></div>}{!locked && <button type="button" className="button secondary full" onClick={() => setPreview(calculated)}><Calculator size={18} />Calculate Cash in Hand</button>}</div>
+  return <div className="cash-calculator">{displayed !== null && <div className={`cash-result ${tone}`}><span>{locked ? 'Submitted Closing Balance' : admin ? 'Report Closing Balance' : "Today's Closing Balance"}</span><strong>{taka(displayed)}</strong></div>}{!locked && <button type="button" className="button secondary full" onClick={() => setPreview(calculated)}><Calculator size={18} />Calculate Closing Balance</button>}</div>
 }
 
 export function DailyEntryPortal({ data, admin = false }) {
@@ -172,6 +172,6 @@ export function DailyEntryPortal({ data, admin = false }) {
     <AmountPanel id="local-supplier" icon={ShoppingBasket} title="Local Supplier" description="Cash purchases made locally today." category="cash_purchase" entries={cashPurchases} total={totals.cash_purchases} locked={locked} history="/local-supplier" onAdd={onAdd} onDelete={onDelete} />
     <OverheadPanel categories={data.overheadCategories} entries={overhead} locked={locked} total={totals.overhead_cost} onAdd={onAdd} onDelete={onDelete} />
     <AmountPanel id="conveyance" icon={Bike} title="Conveyance" description="Extra delivery and transport spending." category="conveyance" entries={conveyance} total={totals.conveyance} locked={locked} history="/conveyance" onAdd={onAdd} onDelete={onDelete} />
-    <section className="submit-section card"><div><h2>{admin ? 'Save Report Entries' : "Finish Today's Entry"}</h2><p>Review or delete temporary entries, calculate cash in hand, then save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} openingAmount={data.openingCashInHand} storedAmount={data.cashInHand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} admin={admin} date={data.date} /></div></section>
+    <section className="submit-section card"><div><h2>{admin ? 'Save Report Entries' : "Finish Today's Entry"}</h2><p>Review or delete temporary entries, calculate closing balance, then save everything.</p></div><div className="submit-actions"><CashInHandCalculator totals={totals} openingAmount={data.openingCashInHand} storedAmount={data.cashInHand} locked={locked} /><SubmitReport status={data.report?.status || 'draft'} entries={staged} onSubmitted={clearStaged} admin={admin} date={data.date} /></div></section>
   </div></AdminDashboardContext.Provider>
 }

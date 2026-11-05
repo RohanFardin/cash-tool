@@ -4,7 +4,7 @@ export const summaryItems = [
   ['cash_sales', 'Cash Sales', 'emerald'], ['credit_sales', 'Due Amount', 'blue'],
   ['credit_recovery', 'Due Recovery', 'cyan'], ['supplier_payments', 'Supplier Payment', 'amber'],
   ['supplier_purchases', 'Supplier Purchase', 'rose'],
-  ['cash_purchases', 'Cash Purchase', 'violet'], ['overhead_cost', 'Overhead Cost', 'rose'],
+  ['cash_purchases', 'Local Supplier', 'violet'], ['overhead_cost', 'Overhead Cost', 'rose'],
   ['conveyance', 'Conveyance', 'slate'],
 ]
 

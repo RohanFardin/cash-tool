@@ -25,7 +25,7 @@ export async function getAdminEntryOptions() {
   const supabase = await createClient()
   const results = await Promise.all([
     supabase.from('customers').select('id, name').order('name'),
-    supabase.from('suppliers').select('id, name').order('name'),
+    supabase.from('suppliers').select('id, name, phone_number').order('name'),
     supabase.from('overhead_categories').select('id, name').order('name'),
   ])
   if (results.some((result) => result.error)) throw new Error('Unable to load entry options.')

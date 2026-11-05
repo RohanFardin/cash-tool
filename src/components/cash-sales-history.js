@@ -21,9 +21,9 @@ export async function CashSalesHistory({ searchParams, admin = false }) {
     <div className="history-totals card" aria-label="Totals for all submitted days">
       <div><span>Submitted Days</span><strong>{data.totals.report_count}</strong></div>
       <div><span>Total Sales</span><strong>{taka(data.totals.total_sales)}</strong></div>
-      <div><span>Cash in Hand</span><strong>{taka(data.totals.cash_in_hand)}</strong></div>
+      <div><span>Closing Balance</span><strong>{taka(data.totals.cash_in_hand)}</strong></div>
     </div>
-    <div className="data-table-wrap ledger-table-wrap"><table className="data-table ledger-table cash-history-table"><thead><tr><th scope="col">Date</th><th scope="col" className="number-cell">Total Sales</th><th scope="col" className="number-cell">Cash in Hand</th></tr></thead><tbody>
+    <div className="data-table-wrap ledger-table-wrap"><table className="data-table ledger-table cash-history-table"><thead><tr><th scope="col">Date</th><th scope="col" className="number-cell">Total Sales</th><th scope="col" className="number-cell">Closing Balance</th></tr></thead><tbody>
       {data.reports.map((report) => <tr key={report.id}><td><time dateTime={report.business_date}>{formatDate(report.business_date)}</time></td><td className="number-cell">{taka(report.total_sales)}</td><td className="number-cell">{taka(report.cash_in_hand)}</td></tr>)}
     </tbody><tfoot><tr><th scope="row">Total sales / Latest cash balance</th><td className="number-cell">{taka(data.totals.total_sales)}</td><td className="number-cell">{taka(data.totals.cash_in_hand)}</td></tr></tfoot></table>{!data.reports.length && <div className="empty-state"><p>No submitted reports yet.</p></div>}</div>
     <HistoryPagination path={path} data={data} label="Cash sales history pages" />

@@ -11,7 +11,7 @@ function PurchasePaymentForm({ suppliers, date, onClose, onSaved }) {
   const [state, action, pending] = useActionState(adminPurchasePaymentAction, null)
   const [companies, setCompanies] = useState(suppliers)
   // Controlled so a rejected save keeps what was typed.
-  const [values, setValues] = useState({ business_date: date, supplier_id: '', purchase: '', payment: '' })
+  const [values, setValues] = useState({ business_date: date, supplier_id: '', phone_number: '', purchase: '', payment: '' })
   const [newName, setNewName] = useState('')
   const [addState, setAddState] = useState(null)
   const [adding, startAdding] = useTransition()
@@ -25,7 +25,7 @@ function PurchasePaymentForm({ suppliers, date, onClose, onSaved }) {
   }, [onClose, busy])
   const field = (name) => ({ name, value: values[name], onChange: (event) => setValues((current) => ({ ...current, [name]: event.target.value })) })
   const select = (company) => {
-    setValues((current) => ({ ...current, supplier_id: String(company.id) }))
+    setValues((current) => ({ ...current, supplier_id: String(company.id), phone_number: company.phone_number || '' }))
     setNewName('')
   }
   function addCompany() {
@@ -36,8 +36,11 @@ function PurchasePaymentForm({ suppliers, date, onClose, onSaved }) {
       setAddState({ ok: true, message: `${existing.name} selected.` })
       return select(existing)
     }
+    const phone = values.phone_number.trim()
+    if (!phone) return setAddState({ ok: false, message: 'Enter the new company’s phone number.' })
     const input = new FormData()
     input.set('name', name)
+    input.set('phone_number', phone)
     startAdding(async () => {
       const result = await addSupplierAction(null, input)
       setAddState(result)
@@ -50,10 +53,11 @@ function PurchasePaymentForm({ suppliers, date, onClose, onSaved }) {
     <div className="modal" role="dialog" aria-modal="true" aria-labelledby={heading}>
       <div className="modal-head"><h2 id={heading}>Purchase &amp; Payment</h2><button type="button" className="icon-button" aria-label="Close form" disabled={busy} onClick={onClose}><X /></button></div>
       <form action={action} className="entry-form">
-        <p className="helper-text">Saved to the company account only. These amounts do not change Cash in Hand.</p>
+        <p className="helper-text">Saved to the company account only. These amounts do not change Closing Balance.</p>
         <label><span>Date</span><input type="date" max={date} required {...field('business_date')} /></label>
-        <label><span>Company Name</span><select required {...field('supplier_id')}><option value="" disabled>Select company</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>
-        <div className="company-add-row"><input aria-label="New company name" placeholder="New company name" maxLength="150" value={newName} onChange={(event) => setNewName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addCompany() } }} /><button type="button" className="button secondary" disabled={busy || !newName.trim()} onClick={addCompany}><Plus size={18} />{adding ? 'Adding…' : 'Add'}</button></div>
+        <label><span>Company Name</span><select required name="supplier_id" value={values.supplier_id} onChange={(event) => select(companies.find((company) => String(company.id) === event.target.value))}><option value="" disabled>Select company</option>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>
+        <div className="company-add-row"><input aria-label="New company name" placeholder="New company name" maxLength="150" value={newName} onChange={(event) => { setNewName(event.target.value); setAddState(null); if (values.supplier_id) setValues((current) => ({ ...current, supplier_id: '', phone_number: '' })) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addCompany() } }} /><button type="button" className="button secondary" disabled={busy || !newName.trim()} onClick={addCompany}><Plus size={18} />{adding ? 'Adding…' : 'Add'}</button></div>
+        <label><span>Phone Number</span><input type="tel" inputMode="tel" maxLength="30" required={Boolean(newName.trim())} readOnly={Boolean(values.supplier_id)} placeholder={values.supplier_id ? 'No saved phone number' : 'Enter the new company’s phone number'} {...field('phone_number')} /></label>
         <ActionMessage state={addState} />
         <div className="amount-pair">{[['purchase', 'Purchase'], ['payment', 'Payment']].map(([name, label]) => <label key={name}><span>{label}</span><div className="money-input"><b>৳</b><input type="number" inputMode="decimal" min="0.01" step="0.01" {...field(name)} /></div></label>)}</div>
         <ActionMessage state={state} /><div className="form-actions"><button type="button" className="button ghost" disabled={busy} onClick={onClose}>Cancel</button><SubmitButton>Save</SubmitButton></div>

@@ -35,7 +35,7 @@ const datasets = {
     { id: 3, business_date: yesterday, cash_sales: 100, credit_sales: 0, credit_recovery: 0, supplier_purchases: 0, supplier_payments: 150, cash_purchases: 0, overhead_cost: 0, conveyance: 0 },
   ],
   customers: [{ id: 1, name: 'Alice', active: true, created_at: timestamp }, { id: 2, name: 'Bob', active: true, created_at: timestamp }, { id: 3, name: 'New Person', phone_number: '01700000000', active: true, created_at: timestamp }],
-  suppliers: [{ id: 1, name: 'Medicine Company', active: true, created_at: timestamp }, { id: 2, name: 'Other Company', active: true, created_at: timestamp }, { id: 3, name: 'New Company', active: true, created_at: timestamp }],
+  suppliers: [{ id: 1, name: 'Medicine Company', phone_number: '01810000001', active: true, created_at: timestamp }, { id: 2, name: 'Other Company', phone_number: '01820000002', active: true, created_at: timestamp }, { id: 3, name: 'New Company', active: true, created_at: timestamp }],
   overhead_categories: [{ id: 1, name: 'Rent', active: true, created_at: timestamp }, { id: 2, name: 'Cash Drawn', active: true, created_at: timestamp }],
   customer_balances: [{ id: 1, name: 'Alice', active: true, current_due: 100 }],
   supplier_balances: [{ id: 1, name: 'Medicine Company', active: true, current_due: 100 }],
@@ -219,7 +219,7 @@ const backend = createServer(async (request, response) => {
     for (const [type, amount] of [['purchase', params.p_purchase], ['payment', params.p_payment]]) {
       if (amount !== null) datasets.entry_history.push({
         ...base, id: 3000 + datasets.entry_history.length, source: 'supplier', category: 'supplier', daily_report_id: null,
-        party_id: company.id, party_name: company.name, entry_type: type, amount, business_date: params.p_business_date, created_by: adminId,
+        party_id: company.id, party_name: company.name, phone_number: company.phone_number, entry_type: type, amount, business_date: params.p_business_date, created_by: adminId,
       })
     }
     return response.end(JSON.stringify(Number(params.p_purchase !== null) + Number(params.p_payment !== null)))
@@ -368,7 +368,7 @@ try {
     assert.ok(html.includes(`<h1>${title}</h1>`), `${path} shows its own history page`)
     if (path === '/cash-sales') {
       const heading = html.match(/<thead>([\s\S]*?)<\/thead>/)?.[1]
-      assert.ok(heading.includes('Date') && heading.includes('Total Sales') && heading.includes('Cash in Hand'))
+      assert.ok(heading.includes('Date') && heading.includes('Total Sales') && heading.includes('Closing Balance'))
       const body = html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]
       assert.equal([...body.matchAll(/<tr>/g)].length, 2, 'cash history has one row per submitted day')
       assert.ok(body.includes(taka(150)) && body.includes(taka(200)), 'daily rows show cumulative closing balances')
@@ -377,6 +377,7 @@ try {
     assert.ok(!html.includes('name="amount"') && !html.includes('name="cash_sales"'), `${path} has no entry forms`)
     assert.ok(html.includes('ledger-table') && html.includes('<thead>') && html.includes('<tfoot>'), `${path} preserves table headers and totals`)
     if (path === '/credit-recovery' || path === '/supplier') assert.ok(html.includes('Phone Number') && html.includes('Notes'), `${path} shows contact numbers and notes`)
+    if (path === '/supplier') assert.ok(html.includes('Outstanding Balance') && !html.includes('Purchases less payments'))
     assert.ok(!html.includes('table-edit'), `${path} has no user edit controls`)
     assert.ok(html.includes('name="from"') && html.includes('name="to"'), `${path} has date range controls`)
     console.log(`PASS ${path}: read-only history`)
@@ -393,7 +394,7 @@ try {
   console.log('PASS /summary: draft report is unavailable')
   const dashboard = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
   assert.ok(dashboard.includes('Cash earned today') && dashboard.includes('<h2>Due Amount</h2>'))
-  assert.ok(dashboard.includes('Calculate Cash in Hand') && dashboard.includes('previous-cash-card card positive'))
+  assert.ok(dashboard.includes('Calculate Closing Balance') && dashboard.includes('previous-cash-card card positive'))
   assert.ok(dashboard.includes(`Running balance through ${formatDate(yesterday, true)}`) && dashboard.includes(taka(150)))
   assert.ok(!/storekeeper/i.test(dashboard), 'the default account is displayed as User')
   assert.ok(!dashboard.includes('mini-totals') && !dashboard.includes('Edit entry') && !dashboard.includes('Delete entry'))
@@ -409,7 +410,7 @@ try {
   const compatibleDashboard = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
   assert.ok(compatibleDashboard.includes(taka(150)) && !/storekeeper/i.test(compatibleDashboard))
   const compatibleHistory = htmlOnly(await (await fetch(`${appUrl}/cash-sales`, { headers })).text())
-  assert.ok(compatibleHistory.includes(taka(150)) && compatibleHistory.includes('Cash in Hand'))
+  assert.ok(compatibleHistory.includes(taka(150)) && compatibleHistory.includes('Closing Balance'))
   cashSchemaAvailable = true
   profile.full_name = 'User'
   console.log('PASS existing database: cash balances and User labels work before migration 009')
@@ -431,13 +432,14 @@ try {
   report.cash_in_hand = 100
   const submitted = htmlOnly(await (await fetch(`${appUrl}/summary`, { headers })).text())
   assert.ok(submitted.includes('Submitted Summary'))
+  assert.ok(submitted.includes('Local Supplier') && !submitted.includes('Cash Purchase'), 'the user summary uses the Local Supplier label')
   assert.ok(submitted.includes(taka(250)) && submitted.includes('Closing balance through this report'))
-  assert.ok(submitted.includes('Yesterday’s Cash in Hand') && submitted.includes(taka(150)), 'submitted user summary includes yesterday’s closing cash')
+  assert.ok(submitted.includes('Opening Balance') && submitted.includes(taka(150)), 'submitted user summary includes yesterday’s closing cash')
   const locked = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
   assert.ok(!locked.includes('name="cash_sales"') && !locked.includes('name="amount"'))
   const lockedCard = locked.match(/<section class="previous-cash-card[\s\S]*?<\/section>/)?.[0]
   assert.ok(lockedCard.includes(taka(250)))
-  assert.ok(locked.includes('Submitted Cash in Hand') && locked.includes(taka(250)))
+  assert.ok(locked.includes('Submitted Closing Balance') && locked.includes(taka(250)))
   console.log('PASS submission: summary available and entry forms closed')
   report.business_date = '2020-01-01'
   const nextDay = htmlOnly(await (await fetch(`${appUrl}/dashboard`, { headers })).text())
@@ -459,7 +461,7 @@ try {
     assert.equal(response.status, 200, `/admin${path}`)
     assert.ok(html.includes('table-edit') && html.includes('Actions'), `/admin${path} has row editing`)
     assert.ok(html.includes('name="from"') && html.includes('name="to"'), `/admin${path} has a date range filter`)
-    if (path === '/cash-sales') assert.ok(html.includes('Cash in Hand') && html.includes('Individual Cash Entries'))
+    if (path === '/cash-sales') assert.ok(html.includes('Closing Balance') && html.includes('Individual Cash Entries'))
     const additions = { '/credit-recovery': ['Add Person', 'New Person'], '/supplier': ['Purchase &amp; Payment', 'New Company'], '/overhead-cost': ['Add Overhead', 'Cash Drawn'] }
     if (additions[path]) {
       const [button, name] = additions[path]
@@ -477,7 +479,7 @@ try {
   assert.ok(adminToday.includes('Submitted Entries') && adminToday.includes('table-edit'))
   assert.ok(adminToday.includes('Delete This Report'))
   assert.ok(adminToday.includes('Submitted by') && adminToday.includes('<dd>User<small>user</small>'), 'current summary identifies its submitter')
-  assert.ok(adminToday.includes('Yesterday’s Cash in Hand') && adminToday.includes(taka(150)), 'admin summary includes yesterday’s closing cash')
+  assert.ok(adminToday.includes('Opening Balance') && adminToday.includes(taka(150)), 'admin summary includes yesterday’s closing cash')
   const rawSettings = await (await fetch(`${appUrl}/admin/settings`, { headers: adminHeaders })).text()
   const settings = htmlOnly(rawSettings)
   assert.ok(settings.includes('Change My Password') && settings.includes('Change User Password'))
@@ -497,7 +499,7 @@ try {
   const adminPast = htmlOnly(await (await fetch(`${appUrl}/admin/summary?date=${previousDate}`, { headers: adminHeaders })).text())
   assert.ok(adminPast.includes('<dd>Second User<small>user2</small>'), 'a different date shows that report’s actual submitter')
   assert.ok(adminPast.includes('1 shared entries') && adminPast.includes('৳200.00'))
-  assert.ok(adminPast.includes(taka(0)) && adminPast.includes('Yesterday’s Cash in Hand'), 'the first report starts with zero prior cash')
+  assert.ok(adminPast.includes(taka(0)) && adminPast.includes('Opening Balance'), 'the first report starts with zero prior cash')
   const pastTables = [...adminPast.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)]
   assert.ok(!pastTables.at(-1)[1].includes('Alice'), 'date-selected summary excludes other days')
   console.log('PASS admin summary: today and date-selected submitted records')
@@ -528,11 +530,6 @@ try {
     assert.equal((await requestBackup(adminHeaders)).status, 503)
     console.log('PASS backup setup: missing server configuration is explicit; run backup:prepare for native round-trip checks')
   }
-  if (process.env.CASH_TOOL_BROWSER) {
-    const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
-    browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
-    assert.deepEqual(logouts, [userId], 'only the idle check signs out, using the user session')
-  } else assert.deepEqual(logouts, [], 'page checks never sign out')
   for (const actorHeaders of [headers, adminHeaders]) {
     for (const path of ['/cash-sales', '/credit-recovery', '/supplier', '/local-supplier', '/overhead-cost', '/conveyance']) {
       const prefix = actorHeaders === adminHeaders ? '/admin' : ''
@@ -639,7 +636,16 @@ try {
   assert.deepEqual(partyAdditions, [], 'read-only page checks do not add dashboard names')
   assert.deepEqual(deletions, [], 'viewing summaries never deletes reports')
   assert.deepEqual(passwordChanges, [], 'viewing settings never changes passwords')
-  assert.deepEqual(profileUpdates, browserEditingChanges.map(value => ({ id: adminId, values: { entry_editing_enabled: value } })), 'browser writes only the explicitly tested edit-mode changes')
+  assert.deepEqual(profileUpdates, [], 'viewing settings never updates profiles')
+  if (process.env.CASH_TOOL_BROWSER) {
+    const { checkMobileLayout } = await import('./check-mobile-layout.mjs')
+    browserEditingChanges = (await checkMobileLayout({ appUrl, adminHeaders, userHeaders: headers })).editingModeChanges
+    assert.deepEqual(logouts, [userId], 'only the idle check signs out, using the user session')
+    assert.deepEqual(profileUpdates, browserEditingChanges.map(value => ({ id: adminId, values: { entry_editing_enabled: value } })), 'browser profile writes only change edit mode')
+    const company = partyAdditions.at(-1)
+    assert.equal(company.name, 'Mobile Phone Company')
+    assert.equal(company.phone_number, '01830000003', 'the phone entered in Purchase & Payment is saved on the company record')
+  } else assert.deepEqual(logouts, [], 'page checks never sign out')
   const manifest = JSON.parse(await readFile(new URL('../.next-page-check/dev/server/server-reference-manifest.json', import.meta.url), 'utf8'))
   async function invokeAction(name, values, actorHeaders, path) {
     const id = Object.entries(manifest.node).find(([, action]) => action.exportedName === name)?.[0]
@@ -710,7 +716,7 @@ try {
   const accountHistory = htmlOnly(await (await fetch(`${appUrl}/admin/supplier?date=${previousDate}`, { headers: adminHeaders })).text())
   const accountRows = accountHistory.match(/<tbody>([\s\S]*?)<\/tbody>/)[1]
   assert.ok(accountRows.includes('Other Company') && accountRows.includes(taka(5000)) && accountRows.includes(taka(1500.5)))
-  assert.ok(accountRows.includes('Purchase &amp; Payment · not in Cash in Hand') && accountRows.includes(`Date: ${formatDate(previousDate)}`), 'purchase & payment rows are labelled and show their own date')
+  assert.ok(accountRows.includes('Purchase &amp; Payment · not in Closing Balance') && accountRows.includes(`Date: ${formatDate(previousDate)}`), 'purchase & payment rows are labelled and show their own date')
   const beforeInvalidPayment = purchasePayments.length
   for (const [values, message] of [
     [{ supplier_id: '1', business_date: today }, 'Enter a purchase or payment amount.'],

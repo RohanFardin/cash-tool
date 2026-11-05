@@ -764,6 +764,7 @@ test('purchase & payment entries change the company due and history but never ca
   const due = async () => Number((await db.query('select current_due from public.supplier_balances where id=$1', [supplierId])).rows[0].current_due)
   const balanceBefore = await balance()
   const dueBefore = await due()
+  await db.query('update public.suppliers set phone_number=$1 where id=$2', ['01810000001', supplierId])
   const saved = await db.query('select public.admin_add_purchase_payment($1,public.current_business_date()-3,50000,20000) as count', [supplierId])
   assert.equal(saved.rows[0].count, 2)
   assert.equal((await db.query('select public.admin_add_purchase_payment($1,public.current_business_date(),null,75) as count', [supplierId])).rows[0].count, 1)
@@ -776,6 +777,7 @@ test('purchase & payment entries change the company due and history but never ca
 
   const history = (await db.query("select * from public.entry_history where source='supplier' and daily_report_id is null and business_date=public.current_business_date()-3 order by entry_type desc")).rows
   assert.deepEqual(history.map((row) => [row.entry_type, Number(row.amount), row.party_id, row.created_by]), [['purchase', 50000, supplierId, admin], ['payment', 20000, supplierId, admin]])
+  assert.deepEqual(history.map((row) => row.phone_number), ['01810000001', '01810000001'], 'both amounts retain the saved company phone number')
   const totals = (await db.query("select * from public.entry_history_totals('supplier',$1,null,public.current_business_date()-3,public.current_business_date()-3)", [supplierId])).rows[0]
   assert.deepEqual([Number(totals.entry_count), Number(totals.primary_total), Number(totals.secondary_total)], [2, 50000, 20000])
 

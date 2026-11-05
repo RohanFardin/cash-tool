@@ -292,7 +292,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
             beforeTotals: cards.getBoundingClientRect().bottom <= totals.getBoundingClientRect().top,
             fits: document.documentElement.scrollWidth <= innerWidth && [...cards.querySelectorAll('strong')].every(node => node.getBoundingClientRect().right <= innerWidth) };
         })()`)
-        assert.deepEqual(cashCards.labels, ['Yesterday’s Cash in Hand', 'Cash in Hand'])
+        assert.deepEqual(cashCards.labels, ['Opening Balance', 'Closing Balance'])
         assert.deepEqual(cashCards.amounts, [150, 250])
         assert.ok(cashCards.beforeTotals && cashCards.fits, `${path} cash balances appear above totals and fit a ${width}px phone`)
       }
@@ -311,7 +311,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
       const rect = element => { const r = element.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right }; };
       return { title: modal.querySelector('h2').textContent, date: modal.querySelector('input[name=business_date]').value,
         companies: [...modal.querySelectorAll('select[name=supplier_id] option')].map(option => option.textContent),
-        modal: rect(modal), purchase: rect(modal.querySelector('input[name=purchase]')), payment: rect(modal.querySelector('input[name=payment]')),
+        modal: rect(modal), phone: rect(modal.querySelector('input[name=phone_number]')), purchase: rect(modal.querySelector('input[name=purchase]')), payment: rect(modal.querySelector('input[name=payment]')),
         pageWidth: document.documentElement.scrollWidth };
     })()`)
     assert.equal(purchaseForm.title, 'Purchase & Payment')
@@ -319,17 +319,45 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
     assert.ok(purchaseForm.companies.includes('Medicine Company') && purchaseForm.companies.includes('Other Company'))
     assert.ok(Math.abs(purchaseForm.purchase.top - purchaseForm.payment.top) <= 1 && purchaseForm.purchase.right <= purchaseForm.payment.left, 'purchase and payment sit side by side')
     assert.ok(purchaseForm.modal.left >= 0 && purchaseForm.modal.right <= 320 && purchaseForm.payment.right <= purchaseForm.modal.right && purchaseForm.pageWidth <= 321, 'the form fits a 320px phone')
+    assert.ok(purchaseForm.phone.left >= purchaseForm.modal.left && purchaseForm.phone.right <= purchaseForm.modal.right, 'the phone field fits the mobile form')
     // Typing a company that already exists selects it instead of adding a duplicate.
     await evaluate("document.querySelector('.company-add-row input').focus()")
     await page('Input.insertText', { text: 'medicine company' })
     await waitFor("!document.querySelector('.company-add-row button').disabled")
     await evaluate("document.querySelector('.company-add-row button').click()")
     await waitFor("document.querySelector('.modal select[name=supplier_id]').value === '1' && document.querySelector('.company-add-row input').value === ''")
+    assert.equal(await evaluate("document.querySelector('.modal input[name=phone_number]').value"), '01810000001', 'selecting an existing name loads its saved phone number')
+    const chooseCompany = async (name) => evaluate(`(() => {
+      const select = document.querySelector('.modal select[name=supplier_id]');
+      select.value = [...select.options].find(option => option.textContent === ${JSON.stringify(name)}).value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`)
+    await chooseCompany('Other Company')
+    await waitFor("document.querySelector('.modal input[name=phone_number]').value === '01820000002'")
+    await chooseCompany('New Company')
+    await waitFor("document.querySelector('.modal input[name=phone_number]').value === ''")
+    await chooseCompany('Medicine Company')
+    await evaluate("document.querySelector('.company-add-row input').focus()")
+    await page('Input.insertText', { text: 'Mobile Phone Company' })
+    await waitFor("document.querySelector('.modal select[name=supplier_id]').value === '' && document.querySelector('.modal input[name=phone_number]').value === '' && !document.querySelector('.modal input[name=phone_number]').readOnly")
+    await evaluate("document.querySelector('.company-add-row button').click()")
+    await waitFor("document.querySelector('.modal .notice.error')?.textContent.includes('phone number')")
+    assert.equal(await evaluate("document.querySelector('.company-add-row input').value"), 'Mobile Phone Company', 'a missing phone keeps the new company name')
+    await evaluate("document.querySelector('.modal input[name=phone_number]').focus()")
+    await page('Input.insertText', { text: '01830000003' })
+    await evaluate("document.querySelector('.company-add-row button').click()")
+    await waitFor("document.querySelector('.modal select[name=supplier_id]').selectedOptions[0].textContent === 'Mobile Phone Company' && document.querySelector('.company-add-row input').value === '' && document.querySelector('.modal input[name=phone_number]').value === '01830000003'")
     const purchaseScreenshot = await page('Page.captureScreenshot', { format: 'png' })
     await writeFile('.next-page-check/screenshots/admin-purchase-payment.png', Buffer.from(purchaseScreenshot.data, 'base64'))
     await evaluate("document.querySelector('.modal .button.ghost').click()")
     await waitFor("!document.querySelector('.modal')")
-    console.log('PASS mobile purchase & payment: today’s date, company list, existing-name selection and side-by-side amounts at 320px')
+    await evaluate(`${openPurchasePayment}.click()`)
+    await waitFor("Boolean(document.querySelector('.modal select[name=supplier_id]'))")
+    await chooseCompany('Mobile Phone Company')
+    await waitFor("document.querySelector('.modal input[name=phone_number]').value === '01830000003'")
+    await evaluate("document.querySelector('.modal .button.ghost').click()")
+    await waitFor("!document.querySelector('.modal')")
+    console.log('PASS mobile purchase & payment: saved phones load and switch correctly, new companies require and retain their phone number, form fits 320px')
 
     const userSplit = userHeaders.cookie.indexOf('=')
     await page('Network.setCookie', { name: userHeaders.cookie.slice(0, userSplit), value: userHeaders.cookie.slice(userSplit + 1), url: appUrl })
