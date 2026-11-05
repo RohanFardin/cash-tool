@@ -792,7 +792,51 @@ test('purchase & payment entries change the company due and history but never ca
 
 test('only administrators can record purchase & payment entries', async () => {
   await rejectsQuery('select public.admin_add_purchase_payment($1,public.current_business_date(),100,null)', [supplierId], /Administrator access required/)
+  await rejectsQuery("select public.admin_add_purchase_payment($1,public.current_business_date(),null,null,'01899999999')", [supplierId], /Administrator access required/)
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, null)
   await rejectsQuery("insert into public.supplier_ledger_entries (supplier_id,business_date,entry_type,amount,created_by,updated_by) values ($1,public.current_business_date(),'payment',100,$2,$2)", [supplierId, operator], /Administrator access required/)
+})
+
+test('supplier phone edits persist on the company and new entries while preserving earlier contact snapshots', async () => {
+  const earlier = (await supplier('purchase', 50, '01810000001')).rows[0]
+  await actor(admin)
+  const saved = await db.query("select public.admin_add_purchase_payment($1,public.current_business_date(),100,25,' 01820000002 ') as count", [supplierId])
+  assert.equal(saved.rows[0].count, 2)
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, '01820000002')
+  assert.equal((await db.query('select phone_number from public.supplier_ledger_entries where id=$1', [earlier.id])).rows[0].phone_number, '01810000001')
+  const entries = (await db.query('select phone_number from public.entry_history where category=\'supplier\' and daily_report_id is null')).rows
+  assert.deepEqual(entries.map((row) => row.phone_number), ['01820000002', '01820000002'])
+  await db.query('select public.admin_add_purchase_payment($1,public.current_business_date(),null,10)', [supplierId])
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, '01820000002', 'an older caller that omits the phone keeps the saved number')
+})
+
+test('administrators can save or clear only a company phone without financial entries or edit mode', async () => {
+  await cash(100)
+  await submit()
+  await actor(admin)
+  await db.query('update public.profiles set entry_editing_enabled=false where id=$1', [admin])
+  const before = (await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [todayId])).rows[0].cash_in_hand
+  const other = (await db.query("insert into public.suppliers (name,phone_number,created_by) values ('Other Company','01800000000',$1) returning id", [admin])).rows[0].id
+  const saved = await db.query("select public.admin_add_purchase_payment($1,public.current_business_date(),null,null,'01830000003') as count", [supplierId])
+  assert.equal(saved.rows[0].count, 0)
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, '01830000003')
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [other])).rows[0].phone_number, '01800000000')
+  assert.equal((await db.query('select count(*)::int as count from public.supplier_ledger_entries')).rows[0].count, 0)
+  assert.equal((await db.query('select cash_in_hand from public.daily_cash_balances where id=$1', [todayId])).rows[0].cash_in_hand, before)
+  await db.query("select public.admin_add_purchase_payment($1,public.current_business_date(),null,null,' ')", [supplierId])
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, null)
+})
+
+test('invalid supplier saves roll back both the company phone and any purchase/payment entries', async () => {
+  await actor(admin)
+  const call = 'select public.admin_add_purchase_payment($1,public.current_business_date(),$2,$3,$4)'
+  for (const params of [
+    [supplierId, 10, -5, '01899999999'],
+    [supplierId, 10, null, '0'.repeat(31)],
+    [supplierId, 10, 1000000000000, '01899999999'],
+  ]) await rejectsQuery(call, params)
+  assert.equal((await db.query('select phone_number from public.suppliers where id=$1', [supplierId])).rows[0].phone_number, null)
+  assert.equal((await db.query('select count(*)::int as count from public.supplier_ledger_entries')).rows[0].count, 0)
 })
 
 test('purchase & payment rejects missing or invalid amounts, future dates and unknown companies', async () => {

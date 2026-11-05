@@ -173,20 +173,24 @@ export async function adminPurchasePaymentAction(_previous, formData) {
   const rawPayment = String(formData.get('payment') || '').trim()
   const purchase = rawPurchase ? amount(rawPurchase) : null
   const payment = rawPayment ? amount(rawPayment) : null
+  const hasPhone = formData.has('phone_number')
+  const phone = String(formData.get('phone_number') || '').trim()
+  if (phone.length > 30) return bad('Phone numbers must be 30 characters or fewer.')
   if ((rawPurchase && purchase === null) || (rawPayment && payment === null)) return bad('Enter amounts greater than zero.')
-  if (purchase === null && payment === null) return bad('Enter a purchase or payment amount.')
+  if (purchase === null && payment === null && !hasPhone) return bad('Enter a purchase or payment amount.')
   try {
     const supabase = await createClient()
     const { error } = await supabase.rpc('admin_add_purchase_payment', {
       p_supplier_id: supplierId, p_business_date: date, p_purchase: purchase, p_payment: payment,
+      ...(hasPhone ? { p_phone_number: phone } : {}),
     })
     if (error?.code === 'PGRST202') return bad('Purchase & Payment is not available yet. Apply the latest database migration.')
     if (error) throw error
     refreshAccountingPages()
-    return { ...ok('Purchase & payment saved.'), businessDate: date }
+    return { ...ok(purchase !== null || payment !== null ? 'Purchase & payment saved.' : 'Company phone number saved.'), businessDate: date }
   } catch (error) {
     console.error('adminPurchasePaymentAction', { code: error.code, message: error.message })
-    return bad('Unable to save. Check the company and amounts, then try again.')
+    return bad('Unable to save. Check the company, phone number and amounts, then try again.')
   }
 }
 

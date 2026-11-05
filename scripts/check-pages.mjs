@@ -216,6 +216,11 @@ const backend = createServer(async (request, response) => {
     const params = JSON.parse(body)
     purchasePayments.push(params)
     const company = datasets.suppliers.find((row) => row.id === params.p_supplier_id)
+    if (params.p_phone_number !== undefined) {
+      company.phone_number = params.p_phone_number || null
+      const balance = datasets.supplier_balances.find((row) => row.id === company.id)
+      if (balance) balance.phone_number = company.phone_number
+    }
     for (const [type, amount] of [['purchase', params.p_purchase], ['payment', params.p_payment]]) {
       if (amount !== null) datasets.entry_history.push({
         ...base, id: 3000 + datasets.entry_history.length, source: 'supplier', category: 'supplier', daily_report_id: null,
@@ -644,7 +649,8 @@ try {
     assert.deepEqual(profileUpdates, browserEditingChanges.map(value => ({ id: adminId, values: { entry_editing_enabled: value } })), 'browser profile writes only change edit mode')
     const company = partyAdditions.at(-1)
     assert.equal(company.name, 'Mobile Phone Company')
-    assert.equal(company.phone_number, '01830000003', 'the phone entered in Purchase & Payment is saved on the company record')
+    assert.equal(company.phone_number, '01830000003', 'the new company is created with its entered phone number')
+    assert.equal(datasets.suppliers.find((row) => row.id === company.id).phone_number, '01840000004', 'editing the selected company phone persists on its database record')
   } else assert.deepEqual(logouts, [], 'page checks never sign out')
   const manifest = JSON.parse(await readFile(new URL('../.next-page-check/dev/server/server-reference-manifest.json', import.meta.url), 'utf8'))
   async function invokeAction(name, values, actorHeaders, path) {
@@ -707,15 +713,20 @@ try {
   async function savePurchasePayment(values, actorHeaders = adminHeaders) {
     return invokeAction('adminPurchasePaymentAction', values, actorHeaders, '/admin/supplier')
   }
-  const purchasePayment = await savePurchasePayment({ supplier_id: '2', business_date: previousDate, purchase: '5000', payment: '1500.5' })
+  const purchasePayment = await savePurchasePayment({ supplier_id: '2', business_date: previousDate, purchase: '5000', payment: '1500.5', phone_number: ' 01850000005 ' })
   assert.ok(purchasePayment.body.includes('Purchase & payment saved.'))
-  assert.deepEqual(purchasePayments[0], { p_supplier_id: 2, p_business_date: previousDate, p_purchase: 5000, p_payment: 1500.5 })
+  assert.deepEqual(purchasePayments.at(-1), { p_supplier_id: 2, p_business_date: previousDate, p_purchase: 5000, p_payment: 1500.5, p_phone_number: '01850000005' })
+  assert.equal(datasets.suppliers.find((company) => company.id === 2).phone_number, '01850000005')
   const paymentOnly = await savePurchasePayment({ supplier_id: '1', business_date: today, purchase: '', payment: '75' })
   assert.ok(paymentOnly.body.includes('payment saved.'))
-  assert.deepEqual(purchasePayments[1], { p_supplier_id: 1, p_business_date: today, p_purchase: null, p_payment: 75 })
+  assert.deepEqual(purchasePayments.at(-1), { p_supplier_id: 1, p_business_date: today, p_purchase: null, p_payment: 75 })
+  const phoneOnly = await savePurchasePayment({ supplier_id: '1', business_date: today, phone_number: '01860000006' })
+  assert.ok(phoneOnly.body.includes('Company phone number saved.'))
+  assert.equal(datasets.suppliers.find((company) => company.id === 1).phone_number, '01860000006')
   const accountHistory = htmlOnly(await (await fetch(`${appUrl}/admin/supplier?date=${previousDate}`, { headers: adminHeaders })).text())
   const accountRows = accountHistory.match(/<tbody>([\s\S]*?)<\/tbody>/)[1]
   assert.ok(accountRows.includes('Other Company') && accountRows.includes(taka(5000)) && accountRows.includes(taka(1500.5)))
+  assert.ok(accountRows.includes('01850000005'), 'the new entries show the edited phone number')
   assert.ok(accountRows.includes('Purchase &amp; Payment · not in Closing Balance') && accountRows.includes(`Date: ${formatDate(previousDate)}`), 'purchase & payment rows are labelled and show their own date')
   const beforeInvalidPayment = purchasePayments.length
   for (const [values, message] of [
@@ -723,8 +734,9 @@ try {
     [{ supplier_id: '1', business_date: today, purchase: '-5' }, 'Enter amounts greater than zero.'],
     [{ supplier_id: '1', business_date: '2999-01-01', payment: '5' }, 'Select today or an earlier date.'],
     [{ supplier_id: '', business_date: today, payment: '5' }, 'Select a company.'],
+    [{ supplier_id: '1', business_date: today, phone_number: '0'.repeat(31) }, 'Phone numbers must be 30 characters or fewer.'],
   ]) assert.ok((await savePurchasePayment(values)).body.includes(message), message)
-  const forbiddenPayment = await savePurchasePayment({ supplier_id: '1', business_date: today, payment: '5' }, headers)
+  const forbiddenPayment = await savePurchasePayment({ supplier_id: '1', business_date: today, phone_number: '01899999999' }, headers)
   assert.ok(forbiddenPayment.response.headers.get('x-action-redirect')?.startsWith('/dashboard') || forbiddenPayment.body.includes('/dashboard'))
   assert.equal(purchasePayments.length, beforeInvalidPayment, 'invalid and user submissions never reach the purchase & payment RPC')
   console.log('PASS purchase & payment: admin saves purchase and payment on a chosen date, rows are labelled, invalid input and users are rejected')
@@ -869,4 +881,5 @@ try {
   child.kill()
   backend.closeAllConnections()
   backend.close()
+  await backupFixture?.close()
 }
