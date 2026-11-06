@@ -257,7 +257,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
             return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
               from: rect(form.elements.from), to: rect(form.elements.to), values: [form.elements.from.value, form.elements.to.value],
               buttons: [...form.querySelectorAll('.filter-actions .button')].map(rect),
-              fields: [...form.querySelectorAll('input, select')].map(rect) };
+              fields: [...form.querySelectorAll('input:not([type=hidden]), select, .person-select-trigger')].map(rect) };
           })()`)
           assert.equal(controls.viewport, width)
           assert.ok(controls.pageWidth <= width + 1, `${prefix}${path} does not overflow a ${width}px phone`)
@@ -266,6 +266,50 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
           assert.deepEqual(controls.values, ['2020-01-01', selectedDate])
           assert.ok(controls.fields.every(field => field.left >= 0 && field.right <= width), 'date and party fields fit the screen')
           assert.ok(controls.buttons.every(button => button.height >= 44) && Math.abs(controls.buttons[0].top - controls.buttons[1].top) <= 1, `${prefix}${path} at ${width}px: Apply/Reset are touch-sized and side by side: ${JSON.stringify(controls.buttons)}`)
+          if (path === '/credit-recovery') {
+            await waitFor("Object.keys(document.querySelector('.person-select-trigger') || {}).some(key => key.startsWith('__reactProps$'))")
+            await evaluate("document.querySelector('.person-select-trigger').click()")
+            await waitFor("Boolean(document.querySelector('.person-select-options'))")
+            const menu = await evaluate(`(() => {
+              const list = document.querySelector('.person-select-options');
+              const rect = list.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+                options: [...list.querySelectorAll('[role=option]')].map(option => ({ name: option.textContent.trim(), background: getComputedStyle(option).backgroundColor, color: getComputedStyle(option).color })) };
+            })()`)
+            assert.deepEqual(menu.options.map(option => option.name), ['All people', 'Alice', 'Bob', 'New Person'])
+            assert.equal(menu.options[1].background, 'rgb(180, 35, 24)')
+            assert.equal(menu.options[1].color, 'rgb(255, 255, 255)', 'only the unpaid person has a red background with white text')
+            assert.ok([menu.options[0], ...menu.options.slice(2)].every(option => option.background !== 'rgb(180, 35, 24)' && option.color !== 'rgb(255, 255, 255)'), 'all-people, zero balances and overpayments keep normal colors')
+            assert.ok(menu.left >= 0 && menu.right <= width && menu.top >= 0 && menu.bottom <= 844, 'the colored dropdown stays inside the phone viewport')
+            const colorsScreenshot = await page('Page.captureScreenshot', { format: 'png' })
+            await writeFile(`.next-page-check/screenshots/${prefix ? 'admin' : 'user'}-due-colors-${width}.png`, Buffer.from(colorsScreenshot.data, 'base64'))
+            await evaluate("[...document.querySelectorAll('.person-select-option')].find(option => option.textContent.trim() === 'Alice').click()")
+            await waitFor("document.querySelector('.date-range-filter input[name=party]').value === '1' && !document.querySelector('.person-select-options')")
+            assert.ok(await evaluate("document.querySelector('.person-select-trigger').classList.contains('has-due')"))
+            if (width === 390) {
+              const press = async (key, code = key) => {
+                await page('Input.dispatchKeyEvent', { type: 'keyDown', key, code })
+                await page('Input.dispatchKeyEvent', { type: 'keyUp', key, code })
+              }
+              await press('Enter')
+              await waitFor("document.querySelector('.person-select-trigger').getAttribute('aria-expanded') === 'true'")
+              await press('End')
+              await press('Escape')
+              assert.equal(await evaluate("document.querySelector('input[name=party]').value"), '1', 'Escape cancels keyboard exploration without changing the filter')
+              await evaluate("document.querySelector('.date-range-filter .filter-actions button').click()")
+              await waitFor("new URL(location.href).searchParams.get('party') === '1' && document.querySelector('.ledger-table tbody')?.textContent.includes('Alice') && !document.querySelector('.ledger-table tbody')?.textContent.includes('Bob')")
+              assert.deepEqual(await evaluate("[document.querySelector('input[name=from]').value, document.querySelector('input[name=to]').value]"), ['2020-01-01', selectedDate])
+              await evaluate("document.querySelector('.date-range-filter .filter-actions a').click()")
+              await waitFor("!location.search && document.querySelector('.person-select-trigger')?.textContent.includes('All people')")
+              await waitFor("Object.keys(document.querySelector('.person-select-trigger') || {}).some(key => key.startsWith('__reactProps$'))")
+              await evaluate("document.querySelector('.person-select-trigger').focus()")
+              await press('b', 'KeyB')
+              await waitFor("Boolean(document.querySelector('.person-select-options'))")
+              await press('Enter')
+              await waitFor("document.querySelector('input[name=party]').value === '2'")
+              assert.ok(await evaluate("!document.querySelector('.person-select-trigger').classList.contains('has-due')"), 'keyboard selection of a paid person uses normal colors')
+            }
+          }
           if (width === 390 && path === '/credit-recovery') {
             const screenshot = await page('Page.captureScreenshot', { format: 'png' })
             await writeFile(`.next-page-check/screenshots/${prefix ? 'admin' : 'user'}-date-filters.png`, Buffer.from(screenshot.data, 'base64'))
@@ -298,6 +342,7 @@ export async function checkMobileLayout({ appUrl, adminHeaders, userHeaders }) {
       }
     }
     console.log('PASS all user/admin date filters at 320px and 390px: paired dates, retained values, full-width name filters, touch-sized actions and no page overflow')
+    console.log('PASS due colors for both roles: red/white unpaid names, normal zero/overpaid names, keyboard selection, Escape, Apply, date retention and Reset')
     await page('Emulation.setDeviceMetricsOverride', { width: 320, height: 700, deviceScaleFactor: 1, mobile: true })
     const adminSplit = adminHeaders.cookie.indexOf('=')
     await page('Network.setCookie', { name: adminHeaders.cookie.slice(0, adminSplit), value: adminHeaders.cookie.slice(adminSplit + 1), url: appUrl })

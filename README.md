@@ -2,7 +2,7 @@
 
 Daily entry happens on `/dashboard`. New amounts are held temporarily in the browser, where users can review and delete them. Submitting saves the full batch atomically, closes the forms, and unlocks `/summary`. The next dashboard day starts at midnight in `Asia/Dhaka`; earlier submitted entries remain in history.
 
-Read-only history is available at `/cash-sales`, `/credit-recovery`, `/supplier`, `/local-supplier`, `/overhead-cost`, and `/conveyance`. Cash Sales shows one row per submitted day with Date, Total Sales, and the running Closing Balance. Credit and supplier pages have name filters. Totals cover all matching records, including records on other pages.
+Read-only history is available at `/cash-sales`, `/credit-recovery`, `/supplier`, `/local-supplier`, `/overhead-cost`, and `/conveyance`. Cash Sales shows one row per submitted day with Date, Total Sales, and the running Closing Balance. Credit and supplier pages have name filters. On both Due Amount / Due Recovery pages, the Person Name dropdown shows people with a positive saved balance in red with white text. Fully recovered and overpaid accounts keep normal colors. This uses the customer balance across all dates, independently of the selected history range, and supports touch and keyboard selection. Totals cover all matching records, including records on other pages.
 
 ## Database setup
 

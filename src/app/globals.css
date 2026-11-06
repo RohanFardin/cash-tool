@@ -146,6 +146,19 @@ input:disabled { background: #edf1ef; color: #66736f; }
 .filter-heading { grid-column: 1 / -1; display: flex; align-items: center; gap: .5rem; color: var(--primary-dark); font-size: .9rem; font-weight: 700; }
 .history-filter label { min-width: 0; }
 .history-filter input, .history-filter select { min-width: 0; max-width: 100%; }
+.customer-filter { display: grid; gap: .45rem; }
+.person-select { position: relative; min-width: 0; }
+.person-select-trigger, .person-select-option { display: flex; align-items: center; justify-content: space-between; gap: .65rem; width: 100%; text-align: left; color: var(--text); background: #fff; cursor: pointer; }
+.person-select-trigger { min-height: 48px; padding: .75rem .85rem; border: 1px solid #ccd8d4; border-radius: 12px; }
+.person-select-trigger span, .person-select-option span { min-width: 0; overflow-wrap: anywhere; }
+.person-select-trigger svg, .person-select-option svg { flex-shrink: 0; }
+.person-select-trigger:focus-visible { outline: 3px solid #95caaa; outline-offset: 2px; }
+.person-select-options { position: absolute; z-index: 60; top: calc(100% + .35rem); inset-inline: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); padding: .25rem; }
+.person-select-options.opens-above { top: auto; bottom: calc(100% + .35rem); }
+.person-select-option { min-height: 44px; padding: .65rem .75rem; border: 0; border-radius: 8px; }
+.person-select-option.is-active { background: var(--primary-soft); box-shadow: inset 0 0 0 2px var(--primary); }
+.person-select .has-due { background: var(--danger); color: #fff; }
+.person-select-option.has-due.is-active { box-shadow: inset 0 0 0 2px #fff; outline: 1px solid var(--danger); }
 input[type="date"] { min-width: 0; max-width: 100%; min-height: 48px; font-size: 16px; appearance: none; -webkit-appearance: none; }
 input[type="date"]::-webkit-date-and-time-value { min-height: 1.2em; text-align: left; }
 input[type="date"]::-webkit-datetime-edit { padding: 0; }

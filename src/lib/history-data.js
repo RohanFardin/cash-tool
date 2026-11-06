@@ -24,7 +24,7 @@ export async function getHistoryRows(category, params = {}, date = null) {
 export async function getAdminEntryOptions() {
   const supabase = await createClient()
   const results = await Promise.all([
-    supabase.from('customers').select('id, name').order('name'),
+    supabase.from('customer_balances').select('id, name, current_due').order('name'),
     supabase.from('suppliers').select('id, name, phone_number').order('name'),
     supabase.from('overhead_categories').select('id, name').order('name'),
   ])
@@ -61,7 +61,8 @@ export async function getEntryHistory(category, params = {}, { admin = false } =
   const [rows, options] = await Promise.all([
     getHistoryRows(category, params),
     admin ? getAdminEntryOptions() : config.table
-      ? supabase.from(config.table).select('id, name').order('name').then((result) => {
+      ? supabase.from(category === 'credit' ? 'customer_balances' : config.table)
+        .select(category === 'credit' ? 'id, name, current_due' : 'id, name').order('name').then((result) => {
         if (result.error) throw new Error('Unable to load names.')
         return { [config.table]: result.data || [] }
       }) : Promise.resolve({}),

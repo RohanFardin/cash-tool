@@ -37,7 +37,7 @@ const datasets = {
   customers: [{ id: 1, name: 'Alice', active: true, created_at: timestamp }, { id: 2, name: 'Bob', active: true, created_at: timestamp }, { id: 3, name: 'New Person', phone_number: '01700000000', active: true, created_at: timestamp }],
   suppliers: [{ id: 1, name: 'Medicine Company', phone_number: '01810000001', active: true, created_at: timestamp }, { id: 2, name: 'Other Company', phone_number: '01820000002', active: true, created_at: timestamp }, { id: 3, name: 'New Company', active: true, created_at: timestamp }],
   overhead_categories: [{ id: 1, name: 'Rent', active: true, created_at: timestamp }, { id: 2, name: 'Cash Drawn', active: true, created_at: timestamp }],
-  customer_balances: [{ id: 1, name: 'Alice', active: true, current_due: 100 }],
+  customer_balances: [{ id: 1, name: 'Alice', active: true, current_due: 100 }, { id: 2, name: 'Bob', active: true, current_due: 0 }, { id: 3, name: 'New Person', active: true, current_due: -25 }],
   supplier_balances: [{ id: 1, name: 'Medicine Company', active: true, current_due: 100 }],
   cash_sales_entries: [{ ...base, id: 1, entry_type: 'cash_sale' }],
   customer_ledger_entries: [{ ...base, id: 1, customer_id: 1, entry_type: 'credit_sale', customers: { name: 'Alice' } }],
@@ -241,6 +241,7 @@ const backend = createServer(async (request, response) => {
     }
     const id = Math.max(...datasets[table].map((row) => row.id)) + 1
     datasets[table].push({ id, name: params.p_name, phone_number: params.p_phone_number, active: true, created_at: timestamp })
+    if (params.p_category === 'credit') datasets.customer_balances.push({ id, name: params.p_name, active: true, current_due: params.p_entry_type === 'credit_recovery' ? -Number(params.p_amount || 0) : Number(params.p_amount || 0) })
     if (params.p_amount !== null) datasets.entry_history.push({
       ...base, id: 1000 + additions.length, source: params.p_category === 'credit' ? 'customer' : 'supplier',
       category: params.p_category, party_id: id, party_name: params.p_name, entry_type: params.p_entry_type,
@@ -393,6 +394,17 @@ try {
     assert.ok(table.includes(keep) && !table.includes(exclude), `${path} applies the name filter`)
     console.log(`PASS ${path}: name filter`)
   }
+  for (const prefix of ['', '/admin']) {
+    const actorHeaders = prefix ? adminHeaders : headers
+    const url = `${appUrl}${prefix}/credit-recovery?party=1&from=${previousDate}&to=${previousDate}`
+    const unpaid = htmlOnly(await (await fetch(url, { headers: actorHeaders })).text())
+    assert.ok(unpaid.includes('person-select-trigger has-due'), 'unpaid customers stay red when their due falls outside the selected dates')
+    datasets.customer_balances[0].current_due = 0
+    const paid = htmlOnly(await (await fetch(url, { headers: actorHeaders })).text())
+    assert.ok(!paid.includes('person-select-trigger has-due'), 'a fully recovered customer returns to normal after refreshing')
+    datasets.customer_balances[0].current_due = 100
+  }
+  console.log('PASS customer balance colors: both roles use the full saved balance, ignore history date filters and clear red when fully recovered')
   const draftSummary = await fetch(`${appUrl}/summary`, { headers, redirect: 'manual' })
   const draftBody = await draftSummary.text()
   assert.ok(draftSummary.headers.get('location') === '/dashboard' || draftBody.includes('url=/dashboard'), 'draft summary redirects to dashboard')
